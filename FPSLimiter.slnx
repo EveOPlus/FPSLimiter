@@ -1,0 +1,4 @@
+<Solution>
+  <Project Path="FPSLimiter.Hook/FPSLimiter.Hook.csproj" Id="93b03274-3712-459e-907f-33f222f6fb23" />
+  <Project Path="FPSLimiter/FPSLimiter.csproj" />
+</Solution>

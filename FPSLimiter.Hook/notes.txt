@@ -1,0 +1,2 @@
+install https://aka.ms/nativeaot-prerequisites
+dotnet publish -c Release -r win-x64
