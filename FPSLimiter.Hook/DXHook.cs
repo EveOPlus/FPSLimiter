@@ -1,4 +1,5 @@
-﻿using SharpDX.Direct3D;
+﻿using System.ComponentModel.DataAnnotations;
+using SharpDX.Direct3D;
 using SharpDX.Direct3D11;
 using SharpDX.DXGI;
 using System.Diagnostics;
@@ -23,41 +24,47 @@ public unsafe class DxHook
     private static double _perFrameTargetMsInFocus = 1000.0 / _targetFpsInFocus;
     private static double _perFrameTargetMsInBackground = 1000.0 / _targetFpsInBackground;
 
-    private static bool _lastCheckedFocusResult = true;
+    private static bool _isOurWindowInFocus = true;
     private static bool _isFpsThrottleActive = true;
     private static bool _isNamedPipeRunning = true;
 
-    private static IntPtr _thisClientsHandle = IntPtr.Zero; // We don't know it at the start.
+    // We're going to assume that the MainWindowHandle is the one we care about.
+    // This may not be true for every game, but it should hold true most the time, and it should do what I need for now...
+    private static IntPtr _thisClientsHandle = Process.GetCurrentProcess().MainWindowHandle; 
 
-    private static NamedPipeServerStream _namedPipeServerStream;
+    private static NamedPipeServerStream _namedPipeServerStream = null!;
 
     private static readonly uint CurrentPid = (uint)Process.GetCurrentProcess().Id;
     private static readonly Stopwatch LastFrameSw = Stopwatch.StartNew();
     private static readonly Stopwatch LastCheckedFocusSw = Stopwatch.StartNew();
     private static readonly PrecisionSleep PrecisionSleep = new ();
     
-    // Name the pipe based on the Process ID so clients don't conflict, we can also use this like a mutex which should work on linux too.
-    private static readonly string _fpsLimiterPipeName = "FpsLimiter_" + Process.GetCurrentProcess().Id;
+    // Name the pipe based on the MainWindowHandle so clients don't conflict and so it's easy to find, we can also use this like a mutex which should work on linux too.
+    private static readonly string _fpsLimiterPipeName = "FpsLimiter_" + _thisClientsHandle;
     
+    private static readonly Action<string> _log = x => DebugLogger.WriteLine(x, _thisClientsHandle);
+
     [UnmanagedCallersOnly(EntryPoint = "Initialize", CallConvs = [typeof(CallConvStdcall)])]
     public static void Initialize()
     {
-        //TimeBeginPeriod(1); // We need a precision sleep, but trying to replace the Sleep with a WaitableTimer instead.
-
         try
         {
             _namedPipeServerStream = CreateNamedPipeServer();
         }
-        catch
+        catch (Exception ex)
         {
             // Double on using the named pipe like a cross-platform mutex. If the named pipe is already taken then don't hook again.
+            _log($"Failed to create named pipe with error: {ex}");
             return;
         }
 
         // Setup a named pipe so we can manage the target fps from another process such as Eve-O Preview.
         Task.Run(StartPipeServer);
-        
-        // Setup dummy DXGI objects to find the VTable address
+
+        _log($"Subscribing to EVENT_SYSTEM_FOREGROUND");
+        WinEventHook.StartListening(HandleForegroundChangedEvent);
+
+        _log($"Setup dummy DXGI objects to find the VTable address");
         using var factory = new Factory1();
         using var device = new SharpDX.Direct3D11.Device(DriverType.Hardware, DeviceCreationFlags.None); 
         using var swapChain = new SwapChain(factory, device, new SwapChainDescription()
@@ -72,14 +79,14 @@ public unsafe class DxHook
 
         void** vTablePointer = *(void***)swapChain.NativePointer;
 
-        // Present should be at index 8 for DirectX 11.
+        _log($"Locating Present should at index 8 for DirectX 11");
         void** presentEntryPtr = &vTablePointer[8];
         _originalPresent = (delegate* unmanaged[Stdcall]<IntPtr, uint, uint, int>)*presentEntryPtr;
 
         // Grant access to the memory address
         if (VirtualProtect((IntPtr)presentEntryPtr, (UIntPtr)sizeof(nint), PAGE_EXECUTE_READWRITE, out var oldProtect))
         {
-            // Jump to our instruction instead so we can wait before handing it back to dx.
+            _log($"Hooking into Present");
             *presentEntryPtr = (delegate* unmanaged[Stdcall]<IntPtr, uint, uint, int>)&HookedPresent;
             // Set the protection back to what it was before we got here.
             VirtualProtect((IntPtr)presentEntryPtr, (UIntPtr)sizeof(nint), oldProtect, out _);
@@ -90,6 +97,7 @@ public unsafe class DxHook
         {
             if (module.ModuleName?.ToLower() == "d3d12.dll")
             {
+                _log($"Located DirectX 12 module is loaded.");
                 isDx12Game = true;
                 break;
             }
@@ -97,58 +105,75 @@ public unsafe class DxHook
 
         if (isDx12Game)
         {
-            // Present1 should be at index 22 for DirectX 12.
+             _log($"Locating Present1 should at index 22 for DirectX 12");
             void** presentEntry22 = &vTablePointer[22];
             _originalPresent1 = (delegate* unmanaged[Stdcall]<IntPtr, uint, uint, IntPtr, int>)*presentEntry22;
 
             if (VirtualProtect((IntPtr)presentEntry22, (UIntPtr)sizeof(nint), PAGE_EXECUTE_READWRITE, out var oldProtectDx12))
             {
+                _log($"Hooking into Present1");
                 *presentEntry22 = (delegate* unmanaged[Stdcall]<IntPtr, uint, uint, IntPtr, int>)&HookedPresent1;
 
                 VirtualProtect((IntPtr)presentEntry22, (UIntPtr)sizeof(nint), oldProtectDx12, out _);
             }
         }
     }
-    
+
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static bool IsInFocus()
     {
-        // Save some CPU cycles and don't check too often.
-        if (LastCheckedFocusSw.ElapsedMilliseconds < 10)
+        if (LastCheckedFocusSw.ElapsedMilliseconds < 3000)
         {
-            return _lastCheckedFocusResult;
+            return _isOurWindowInFocus;
         }
 
-        LastCheckedFocusSw.Restart();
-
+        // Just as a safe guard lets manually check if we're in focus if it's been a while since anything happened.
+        // We depend mostly on events updating our focus now so we most the time we can trust it but checking once every few seconds is a trivial backup.
+        // This is mostly to protect us accidentally thinking we have focus e.g. if the named pipe gives us focus, but then we lost it somehow in a race condition.
         IntPtr foregroundHandle = GetForegroundWindow();
-        
+        SetOurWindowInFocus(IsThisOurHandle(foregroundHandle));
+
+        return _isOurWindowInFocus;
+    }
+
+    private static void HandleForegroundChangedEvent(IntPtr handleTakingFocus)
+    {
+        SetOurWindowInFocus(IsThisOurHandle(handleTakingFocus));
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static void SetOurWindowInFocus(bool isInFocus)
+    {
+        _isOurWindowInFocus = isInFocus;
+        LastCheckedFocusSw.Restart();
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static bool IsThisOurHandle(IntPtr theHandleToCheck)
+    {
         // If we know the handle, just check it directly
+        // Note: We should always know this because we've started being lazy and assuming it's the main window. but leaving code for future changes if needed.
         if (_thisClientsHandle != IntPtr.Zero)
         {
-            _lastCheckedFocusResult = foregroundHandle == _thisClientsHandle;
-            return _lastCheckedFocusResult;
+            return _thisClientsHandle == theHandleToCheck;
         }
 
-        // We can't be in focus if nothing is.
-        if (foregroundHandle == IntPtr.Zero)
+        // If there's no handle, it can't be ours.
+        if (theHandleToCheck == IntPtr.Zero)
         {
-            _lastCheckedFocusResult = false;
-            return _lastCheckedFocusResult;
+            return false;
         }
 
         // If we don't know the handle yet, compare the process Id until we find it.
-        GetWindowThreadProcessId(foregroundHandle, out uint foregroundPid);
+        GetWindowThreadProcessId(theHandleToCheck, out uint foregroundPid);
 
         if (foregroundPid == CurrentPid)
         {
-            _thisClientsHandle = foregroundHandle;
-            _lastCheckedFocusResult = true;
-            return _lastCheckedFocusResult;
+            _thisClientsHandle = theHandleToCheck;
+            return true;
         }
 
-        _lastCheckedFocusResult = false;
-        return _lastCheckedFocusResult;
+        return false;
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -167,35 +192,32 @@ public unsafe class DxHook
 
                 // First lets wait out some big chunks, but still small enough to break out if we take focus.
                 // This should only really be needed if we're going super slow fps and need to snap back to high speed.
-                while (timeLeftToWait > 12.0)
+                while (timeLeftToWait > 16.0)
                 {
-                    PrecisionSleep.Sleep(10);
+                    Thread.Sleep(1); // This might sleep for around 15ms by default. so only do it while waiting out big chunks.
 
                     // If we received focus, then break out of this frame to reduce lag when switching.
                     if (!inFocusAtStartOfFrame && IsInFocus())
                     {
-                        timeLeftToWait = 0;
+                        LastFrameSw.Restart();
+                        return;
                     }
-                    else
-                    {
-                        // Refresh remaining time left to wait.
-                        timeLeftToWait = perFrameTargetMs - LastFrameSw.Elapsed.TotalMilliseconds;
-                    }
+
+                    // Refresh remaining time left to wait.
+                    timeLeftToWait = perFrameTargetMs - LastFrameSw.Elapsed.TotalMilliseconds;
                 }
-                
-                PrecisionSleep.Sleep(timeLeftToWait);
 
-                //// Wait out the final big chunk to save the CPU a bit longer. We're so close to the end theres no point trying to escape.
-                //if (timeLeftToWait > 1.0)
-                //{
-                //    //PrecisionSleep.Sleep(timeLeftToWait - 1);
-                //}
+                // Wait out the final big chunk to save the CPU a bit longer. We're so close to the end theres no point trying to escape.
+                if (timeLeftToWait > 1.0)
+                {
+                    PrecisionSleep.Sleep(timeLeftToWait - 0.5);
+                }
 
-                //// Busy wait for the final high-precision micro-seconds
-                //while (LastFrameSw.Elapsed.TotalMilliseconds < perFrameTargetMs)
-                //{
-                //    Thread.SpinWait(10);
-                //}
+                // Busy wait for the final high-precision micro-seconds
+                while (LastFrameSw.Elapsed.TotalMilliseconds < perFrameTargetMs)
+                {
+                    Thread.SpinWait(10);
+                }
             }
 
             // Start timing the next frame so we know how much extra delay we need to add.
@@ -209,8 +231,8 @@ public unsafe class DxHook
         ThrottleTheFrame();
         
         // Let DirectX 11 do its thing to generate the next frame.
-        return _originalPresent(swapChain, syncInterval, flags);
-        //return _originalPresent(swapChain, _isFpsThrottleActive ? 0 : syncInterval, flags);
+        //return _originalPresent(swapChain, syncInterval, flags);
+        return _originalPresent(swapChain, _isFpsThrottleActive ? 0 : syncInterval, flags);
     }
 
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvStdcall)])]
@@ -219,22 +241,24 @@ public unsafe class DxHook
         ThrottleTheFrame();
         
         // Let DirectX 12 do its thing to generate the next frame.
-        return _originalPresent1(swapChain, syncInterval, flags, present1Parameters);
+        return _originalPresent1(swapChain, _isFpsThrottleActive ? 0 : syncInterval, flags, present1Parameters);
     }
     
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static NamedPipeServerStream CreateNamedPipeServer()
     {
+        _log($"Creating named pipe server: {_fpsLimiterPipeName}");
         return new NamedPipeServerStream(_fpsLimiterPipeName, PipeDirection.InOut, 1, PipeTransmissionMode.Byte, PipeOptions.None);
     }
 
-    // Just making up a custom mini protocol to send a couple parameters.
-    // We honestly don't need to prefix or have instructions, but 
-    private const byte PipeFpsPrefixByteFocused = 0xF1; // F1 sounds good for FPS. why not?
-    private const byte PipeFpsPrefixByteBackground = 0xF2;
-    private const byte PipeQueryDirection = 0xA1;
-    private const byte PipeUpdateDirection = 0xA2;
-    private const byte PipeSuccessResponseCode = 0x01;
+    // Just making up a custom mini messaging protocol just randomly really.
+    private const byte PipeFpsPrefixByteFocused = 0xF1; // F1 is a prefix before an int (4 bytes) for the target focused FPS rate.
+    private const byte PipeFpsPrefixByteBackground = 0xF2; // F2 is a prefix before an int (4 bytes) for the target background FPS rate.
+    private const byte PipeQueryDirection = 0xA1; // A1 is the first byte, if the caller is requesting read only.
+    private const byte PipeUpdateDirection = 0xA2; // A2 is the first byte, if the caller is asking us to update something.
+    private const byte PipeFireAndForgetDirection = 0xA3; // A3 is the first byte, if the caller wants something done quick and don't really care about the outcome.
+    private const byte PipeSetFocusedCommand = 0xB1; // B1 is the second byte following a A3, to tell our process it needs to be ready to take focus and unthrottle the FPS ASAP.
+    private const byte PipeSuccessResponseCode = 0x01; // 01 is the response we send at the end of a A2 request, like a success return code. 
 
     private static void StartPipeServer()
     {
@@ -244,7 +268,7 @@ public unsafe class DxHook
         {
             try
             {
-                lastPlace = "WaitForConnection";
+                _log($"Named pipe {_fpsLimiterPipeName} WaitForConnection()");
                 _namedPipeServerStream.WaitForConnection();
 
                 using (var reader = new BinaryReader(_namedPipeServerStream, System.Text.Encoding.UTF8, leaveOpen: true))
@@ -254,6 +278,14 @@ public unsafe class DxHook
                     var directionByte = reader.ReadByte();
                     switch (directionByte)
                     {
+                        case PipeFireAndForgetDirection:
+                            if (reader.ReadByte() == PipeSetFocusedCommand)
+                            {
+                                SetOurWindowInFocus(true);
+                                _log($"PipeSetFocusedCommand processed");
+                            }
+
+                            break;
                         case PipeUpdateDirection:
                             lastPlace = "ReadByte PipeFpsPrefixByteFocused";
                             if (reader.ReadByte() == PipeFpsPrefixByteFocused)
@@ -300,6 +332,9 @@ public unsafe class DxHook
 
                             lastPlace = "Write PipeSuccessResponseCode Setting";
                             writer.Write(PipeSuccessResponseCode);
+                            
+                            _log($"PipeUpdateDirection set to FpsInFocus: {_targetFpsInFocus} FpsInBackground: {_targetFpsInBackground}");
+
                             break;
 
                         case PipeQueryDirection:
@@ -335,8 +370,9 @@ public unsafe class DxHook
             }
             catch (Exception ex)
             {
+                _log($"Named pipe {_namedPipeServerStream} encountered error after {lastPlace}: {ex}");
                 Thread.Sleep(10); // hopefully we never crash in a loop but if we do, save the cpu
-                
+
                 // Rather silent failure than crashing another process
 
                 _namedPipeServerStream.Dispose();
@@ -366,10 +402,9 @@ public unsafe class DxHook
 
     [DllImport("user32.dll")]
     private static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint lpdwProcessId);
-
-    // Leaving this here so I can find it back if it's needed again. Hopefully we can move to a waitable timer instead though.
-    //
-    //[DllImport("winmm.dll", EntryPoint = "timeBeginPeriod")]
-    //private static extern uint TimeBeginPeriod(uint uPeriod);
-
+    
+    [DllImport("user32.dll")]
+    static extern bool MessageBeep(uint uType);
+    const uint MB_OK = 0x00000000; // just a ding
+    const uint MB_ICONERROR = 0x00000010; // another noise for testing
 }

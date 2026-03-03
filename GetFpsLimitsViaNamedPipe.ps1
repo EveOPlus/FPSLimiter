@@ -12,7 +12,7 @@ if (-not $process) {
     exit
 }
 
-$pipeName = "FpsLimiter_$($process.Id)"
+$pipeName = "FpsLimiter_$($process[0].MainWindowHandle)"
 Write-Host "Connecting to pipe: \\.\pipe\$pipeName" -ForegroundColor Cyan
 
 try {
@@ -26,7 +26,7 @@ try {
     # Use BinaryWriter for your protocol
     $writer = New-Object System.IO.BinaryWriter($pipe)
 
-    # 3Send Focused FPS (Prefix + Int32)
+    # Send Focused FPS (Prefix + Int32)
     $writer.Write($prefixGetting)    
     $writer.Write($prefixGetting) #send it twice since this is a reserved byte not used. 
     #$writer.Flush()

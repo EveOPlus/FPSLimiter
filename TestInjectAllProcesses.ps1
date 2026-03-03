@@ -21,7 +21,7 @@ public static extern IntPtr GetModuleHandle(string lpModuleName);
 
 $Win32 = Add-Type -Name "Win32Native" -MemberDefinition $Win32Definitions -PassThru
 
-# 1. Get ALL processes with the name
+# Get ALL processes with the name
 $procs = Get-Process -Name $processName -ErrorAction SilentlyContinue
 if (!$procs) { 
     Write-Host "[-] ERROR: No processes named '$processName' found!" -ForegroundColor Red
@@ -30,14 +30,14 @@ if (!$procs) {
 
 Write-Host "[+] Found $($procs.Count) instance(s) of $processName" -ForegroundColor Cyan
 
-# 2. Prepare local DLL info once to avoid redundant loads
+# Prepare local DLL info once to avoid redundant loads
 $fullPath = [System.IO.Path]::GetFullPath($dllPath)
 $pathBytes = [System.Text.Encoding]::ASCII.GetBytes($fullPath + "`0")
 $localModule = $Win32::LoadLibrary($fullPath)
 $localInitAddr = $Win32::GetProcAddress($localModule, "Initialize")
 $offset = if ($localInitAddr -ne [IntPtr]::Zero) { $localInitAddr.ToInt64() - $localModule.ToInt64() } else { 0 }
 
-# 3. Iterate through each process
+# Iterate through each process
 foreach ($proc in $procs) {
     Write-Host "`n[#] Target PID: $($proc.Id)" -ForegroundColor Yellow
     

@@ -1,6 +1,5 @@
 ﻿# --- CONFIGURATION ---
-#$processName = "3DMarkSteelNomad" # e.g., "SkyrimSE" (No .exe)
-$processName = "exefile" # e.g., "SkyrimSE" (No .exe)
+$processName = "3DMarkSteelNomad" # e.g. exefile, 3DMarkSteelNomad
 $dllPath = "C:\dev\FPSLimiter\FPSLimiter.Hook\bin\Release\net10.0\win-x64\publish\FPSLimiter.Hook.dll"
 
 $Win32Definitions = @'
@@ -62,7 +61,7 @@ if ($hThread -eq [IntPtr]::Zero) {
     Write-Host "[+] Injection command sent! Checking status..." -ForegroundColor Green
     Start-Sleep -Seconds 2
     
-    # --- 4. VERIFY ---
+    # --- VERIFY ---
     $loadedModule = Get-Process -Id $proc.Id -Module | Where-Object { $_.FileName -match "FPSLimiter" }
     if ($loadedModule) {
         Write-Host "[SUCCESS] DLL is verified inside the game process!" -ForegroundColor Green
@@ -73,23 +72,26 @@ if ($hThread -eq [IntPtr]::Zero) {
 }
 
 
-# 1. Get the base address of the DLL already in the game
+# Get the base address of the DLL already in the game
 $baseAddr = $loadedModule.BaseAddress
 
-# 2. Load the DLL into OUR PowerShell process to find the 'Initialize' offset
+# Load the DLL into OUR PowerShell process to find the 'Initialize' offset
 $localModule = $Win32::LoadLibrary($fullPath)
 if ($localModule -eq [IntPtr]::Zero) { Write-Host "[-] Failed to load DLL locally." -ForegroundColor Red; exit }
 
 $localInitAddr = $Win32::GetProcAddress($localModule, "Initialize")
 if ($localInitAddr -eq [IntPtr]::Zero) { Write-Host "[-] Could not find 'Initialize' export. Did you rebuild?" -ForegroundColor Red; exit }
 
-# 3. Calculate the offset (Init Address - Module Base)
+# Calculate the offset (Init Address - Module Base)
 $offset = $localInitAddr.ToInt64() - $localModule.ToInt64()
 
-# 4. Apply that offset to the game's base address
+# Apply that offset to the game's base address
 $remoteInitAddr = $baseAddr.ToInt64() + $offset
 
-# 5. Start a new thread in the game at that calculated address
+# Start a new thread in the game at that calculated address
 $hThread2 = $Win32::CreateRemoteThread($hProc, [IntPtr]::Zero, 0, [IntPtr]$remoteInitAddr, [IntPtr]::Zero, 0, [IntPtr]::Zero)
 
 Write-Host "[+] Initialize command sent to remote thread at address: $remoteInitAddr" -ForegroundColor Yellow
+
+# Open a new terminal to reduce locking issues next time we build.
+powershell
