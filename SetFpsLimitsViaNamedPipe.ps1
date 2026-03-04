@@ -1,7 +1,7 @@
 ﻿# Configuration
 $processName = "exefile" # e.g. exefile, 3DMarkSteelNomad
-$targetFpsFocused = 120
-$targetFpsBackground = 10
+$targetFpsFocused = 60
+$targetFpsBackground = 1
 
 # Prefixes from your C# code
 [byte]$prefixSetting = 0xA2
