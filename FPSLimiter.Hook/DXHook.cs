@@ -31,7 +31,7 @@ public unsafe class DxHook
     private static bool _isFpsThrottleActive = true;
     private static bool _isNamedPipeRunning = true;
     private static bool _ignoreNextLostFocus = false;
-    private static int _numberOfFramesToPurgeUnlimited = 0;
+    private static int _ownerProcessId = -1; // -1 means anyone. just run with no owner.
     
     // We're going to assume that the MainWindowHandle is the one we care about.
     // This may not be true for every game, but it should hold true most the time, and it should do what I need for now...
@@ -140,7 +140,26 @@ public unsafe class DxHook
         var currentFocus = IsThisOurHandle(foregroundHandle) ? FocusType.Foreground : FocusType.Background;
         SetOurWindowInFocus(currentFocus);
 
+        EnsureOwnerIsStillAlive();
+
         return _ourFocus;
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static void EnsureOwnerIsStillAlive()
+    {
+        if (_ownerProcessId == -1)
+        {
+            return;
+        }
+
+        if (IsProcessRunning(_ownerProcessId))
+        {
+            return;
+        }
+
+        _ownerProcessId = 0;
+        _isFpsThrottleActive = false;
     }
 
     private static void HandleForegroundChangedEvent(IntPtr handleTakingFocus)
@@ -164,7 +183,6 @@ public unsafe class DxHook
         if (newFocus == FocusType.Predicted)
         {
             _ignoreNextLostFocus = true;
-            _numberOfFramesToPurgeUnlimited = _targetFpsInPredictFocus;
         }
     }
 
@@ -201,12 +219,6 @@ public unsafe class DxHook
     {
         if (_isFpsThrottleActive)
         {
-            if (_numberOfFramesToPurgeUnlimited > 0)
-            {
-                _numberOfFramesToPurgeUnlimited--;
-                return;
-            }
-
             var focusAtStartOfFrame = GetOurCurrentFocus();
 
             double perFrameTargetMs;
@@ -298,16 +310,20 @@ public unsafe class DxHook
     }
 
     // Just making up a custom mini messaging protocol just randomly really.
-    private const byte PipeFpsPrefixByteFocused = 0xF1; // F1 is a prefix before an int (4 bytes) for the target focused FPS rate.
-    private const byte PipeFpsPrefixByteBackground = 0xF2; // F2 is a prefix before an int (4 bytes) for the target background FPS rate.
-    private const byte PipeFpsPrefixBytePredict = 0xF3; // F3 is a prefix before an int (4 bytes) for the target FPS rate when predicting focus is coming.
-    private const byte PipeQueryDirection = 0xA1; // A1 is the first byte, if the caller is requesting read only.
-    private const byte PipeUpdateDirection = 0xA2; // A2 is the first byte, if the caller is asking us to update something.
     private const byte PipeFireAndForgetDirection = 0xA3; // A3 is the first byte, if the caller wants something done quick and don't really care about the outcome.
     private const byte PipeSetFocusedCommand = 0xB1; // B1 is the second byte following a A3, to tell our process it needs to be ready to take focus and unthrottle the FPS ASAP.
     private const byte PipePredictFocusCommand = 0xB3; // B3 is the second byte following a A3, to tell our process that focus might be on the way soon.
-    private const byte PipeSuccessResponseCode = 0x01; // 01 is the response we send at the end of a A2 request, like a success return code. 
+
+    private const byte PipeQueryDirection = 0xA1; // A1 is the first byte, if the caller is requesting read only.
     private const byte PipePingRequestCode = 0xB2; // B2 is used for a simple ping, following an A1
+
+    private const byte PipeUpdateDirection = 0xA2; // A2 is the first byte, if the caller is asking us to update something.
+    private const byte PipeFpsPrefixByteFocused = 0xF1; // F1 is a prefix before an int (4 bytes) for the target focused FPS rate.
+    private const byte PipeFpsPrefixByteBackground = 0xF2; // F2 is a prefix before an int (4 bytes) for the target background FPS rate.
+    private const byte PipeFpsPrefixBytePredict = 0xF3; // F3 is a prefix before an int (4 bytes) for the target FPS rate when predicting focus is coming.
+    private const byte PipeTakeOwnershipCommand = 0xB4; // 0xB4 is a prefix for the calling process to claim ownership of this.
+
+    private const byte PipeSuccessResponseCode = 0x01; // 01 is the response we send at the end of a A2 request, like a success return code. 
 
     private static void StartPipeServer()
     {
@@ -345,71 +361,82 @@ public unsafe class DxHook
                             break;
                         case PipeUpdateDirection:
                             //lastPlace = "ReadByte PipeFpsPrefixByteFocused";
-                            if (reader.ReadByte() == PipeFpsPrefixByteFocused)
+                            var firstUpdateByte = reader.ReadByte();
+                            switch (firstUpdateByte) 
                             {
-                                // since we read the 0xF1 we know the next 4 bytes are going to be an 32 bit int.
-                                //lastPlace = "ReadInt32 newTargetFpsFocus";
-                                var newTargetFpsFocus = reader.ReadInt32();
+                                case PipeTakeOwnershipCommand:
+                                    _ownerProcessId = reader.ReadInt32();
+                                    break;
+                                
+                                case PipeFpsPrefixByteFocused:
+                                    if (reader.ReadByte() == PipeFpsPrefixByteFocused)
+                                    {
+                                        // since we read the 0xF1 we know the next 4 bytes are going to be an 32 bit int.
+                                        //lastPlace = "ReadInt32 newTargetFpsFocus";
+                                        var newTargetFpsFocus = reader.ReadInt32();
 
-                                if (newTargetFpsFocus < 1 || newTargetFpsFocus > 1000)
-                                {
-                                    // anything that might look like it's just unthrottled, we will turn off the throttle.
-                                    _targetFpsInFocus = 0;
-                                    _perFrameTargetMsInFocus = 0;
-                                }
-                                else
-                                {
-                                    _targetFpsInFocus = newTargetFpsFocus;
-                                    _perFrameTargetMsInFocus = 1000.0 / newTargetFpsFocus;
-                                }
+                                        if (newTargetFpsFocus < 1 || newTargetFpsFocus > 1000)
+                                        {
+                                            // anything that might look like it's just unthrottled, we will turn off the throttle.
+                                            _targetFpsInFocus = 0;
+                                            _perFrameTargetMsInFocus = 0;
+                                        }
+                                        else
+                                        {
+                                            _targetFpsInFocus = newTargetFpsFocus;
+                                            _perFrameTargetMsInFocus = 1000.0 / newTargetFpsFocus;
+                                        }
+                                    }
+
+                                    //lastPlace = "ReadByte PipeFpsPrefixByteBackground";
+                                    if (reader.ReadByte() == PipeFpsPrefixByteBackground)
+                                    {
+                                        // since we read the 0xF2 we know the next 4 bytes are going to be an 32 bit int.
+                                        //lastPlace = "ReadInt32 newTargetFpsBackground";
+                                        var newTargetFpsBackground = reader.ReadInt32();
+
+                                        if (newTargetFpsBackground < 1 || newTargetFpsBackground > 1000)
+                                        {
+                                            // anything that might look like it's just unthrottled, we will turn off the throttle.
+                                            _targetFpsInBackground = 0;
+                                            _perFrameTargetMsInBackground = 0;
+                                        }
+                                        else
+                                        {
+                                            _targetFpsInBackground = newTargetFpsBackground;
+                                            _perFrameTargetMsInBackground = 1000.0 / newTargetFpsBackground;
+                                        }
+                                    }
+
+                                    //lastPlace = "ReadByte PipeFpsPrefixBytePredict";
+                                    if (reader.ReadByte() == PipeFpsPrefixBytePredict)
+                                    {
+                                        // since we read the 0xF1 we know the next 4 bytes are going to be an 32 bit int.
+                                        //lastPlace = "ReadInt32 newTargetFpsPredict";
+                                        var newTargetFpsPredict = reader.ReadInt32();
+
+                                        if (newTargetFpsPredict < 1 || newTargetFpsPredict > 1000)
+                                        {
+                                            // anything that might look like it's just unthrottled, we will turn off the throttle.
+                                            _targetFpsInPredictFocus = 0;
+                                            _perFrameTargetMsInPredictFocus = 0;
+                                        }
+                                        else
+                                        {
+                                            _targetFpsInPredictFocus = newTargetFpsPredict;
+                                            _perFrameTargetMsInPredictFocus = 1000.0 / newTargetFpsPredict;
+                                        }
+                                    }
+
+                                    // If both focus and background are 0, then disable the whole throttling.
+                                    _isFpsThrottleActive = _perFrameTargetMsInBackground + _perFrameTargetMsInFocus > 0;
+                                    
+                                    break;
                             }
-
-                            //lastPlace = "ReadByte PipeFpsPrefixByteBackground";
-                            if (reader.ReadByte() == PipeFpsPrefixByteBackground)
-                            {
-                                // since we read the 0xF2 we know the next 4 bytes are going to be an 32 bit int.
-                                //lastPlace = "ReadInt32 newTargetFpsBackground";
-                                var newTargetFpsBackground = reader.ReadInt32();
-
-                                if (newTargetFpsBackground < 1 || newTargetFpsBackground > 1000)
-                                {
-                                    // anything that might look like it's just unthrottled, we will turn off the throttle.
-                                    _targetFpsInBackground = 0;
-                                    _perFrameTargetMsInBackground = 0;
-                                }
-                                else
-                                {
-                                    _targetFpsInBackground = newTargetFpsBackground;
-                                    _perFrameTargetMsInBackground = 1000.0 / newTargetFpsBackground;
-                                }
-                            }
-
-                            //lastPlace = "ReadByte PipeFpsPrefixBytePredict";
-                            if (reader.ReadByte() == PipeFpsPrefixBytePredict)
-                            {
-                                // since we read the 0xF1 we know the next 4 bytes are going to be an 32 bit int.
-                                //lastPlace = "ReadInt32 newTargetFpsPredict";
-                                var newTargetFpsPredict = reader.ReadInt32();
-
-                                if (newTargetFpsPredict < 1 || newTargetFpsPredict > 1000)
-                                {
-                                    // anything that might look like it's just unthrottled, we will turn off the throttle.
-                                    _targetFpsInPredictFocus = 0;
-                                    _perFrameTargetMsInPredictFocus = 0;
-                                }
-                                else
-                                {
-                                    _targetFpsInPredictFocus = newTargetFpsPredict;
-                                    _perFrameTargetMsInPredictFocus = 1000.0 / newTargetFpsPredict;
-                                }
-                            }
-
-                            // If both focus and background are 0, then disable the whole throttling.
-                            _isFpsThrottleActive = _perFrameTargetMsInBackground + _perFrameTargetMsInFocus > 0;
-
+                            
                             //lastPlace = "Write PipeSuccessResponseCode Setting";
                             writer.Write(PipeSuccessResponseCode);
-                            
+
                             //Log($"PipeUpdateDirection set to FpsInFocus: {_targetFpsInFocus} FpsInBackground: {_targetFpsInBackground}");
 
                             break;
@@ -497,4 +524,23 @@ public unsafe class DxHook
     static extern bool MessageBeep(uint uType);
     const uint MB_OK = 0x00000000; // just a ding
     const uint MB_ICONERROR = 0x00000010; // another noise for testing
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern IntPtr OpenProcess(uint processAccess, bool bInheritHandle, int processId);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool CloseHandle(IntPtr hObject);
+
+    private const uint PROCESS_QUERY_LIMITED_INFORMATION = 0x1000;
+    private static bool IsProcessRunning(int pid)
+    {
+        IntPtr processHandle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid);
+        if (processHandle != IntPtr.Zero)
+        {
+            CloseHandle(processHandle);
+            return true;
+        }
+        return false;
+    }
 }
