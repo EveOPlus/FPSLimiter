@@ -369,23 +369,20 @@ public unsafe class DxHook
                                     break;
                                 
                                 case PipeFpsPrefixByteFocused:
-                                    if (reader.ReadByte() == PipeFpsPrefixByteFocused)
-                                    {
-                                        // since we read the 0xF1 we know the next 4 bytes are going to be an 32 bit int.
-                                        //lastPlace = "ReadInt32 newTargetFpsFocus";
-                                        var newTargetFpsFocus = reader.ReadInt32();
+                                    // since we read the 0xF1 we know the next 4 bytes are going to be an 32 bit int.
+                                    //lastPlace = "ReadInt32 newTargetFpsFocus";
+                                    var newTargetFpsFocus = reader.ReadInt32();
 
-                                        if (newTargetFpsFocus < 1 || newTargetFpsFocus > 1000)
-                                        {
-                                            // anything that might look like it's just unthrottled, we will turn off the throttle.
-                                            _targetFpsInFocus = 0;
-                                            _perFrameTargetMsInFocus = 0;
-                                        }
-                                        else
-                                        {
-                                            _targetFpsInFocus = newTargetFpsFocus;
-                                            _perFrameTargetMsInFocus = 1000.0 / newTargetFpsFocus;
-                                        }
+                                    if (newTargetFpsFocus < 1 || newTargetFpsFocus > 1000)
+                                    {
+                                        // anything that might look like it's just unthrottled, we will turn off the throttle.
+                                        _targetFpsInFocus = 0;
+                                        _perFrameTargetMsInFocus = 0;
+                                    }
+                                    else
+                                    {
+                                        _targetFpsInFocus = newTargetFpsFocus;
+                                        _perFrameTargetMsInFocus = 1000.0 / newTargetFpsFocus;
                                     }
 
                                     //lastPlace = "ReadByte PipeFpsPrefixByteBackground";
