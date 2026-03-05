@@ -1,10 +1,14 @@
-﻿using SharpDX.Direct3D;
+﻿using SharpDX;
+using SharpDX.Direct3D;
 using SharpDX.Direct3D11;
 using SharpDX.DXGI;
 using System.Diagnostics;
 using System.IO.Pipes;
+using System.Net;
+using System.Reflection;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
+using static System.Net.Mime.MediaTypeNames;
 
 namespace FPSLimiter.Hook;
 
@@ -54,112 +58,16 @@ public unsafe class DxHook
     [UnmanagedCallersOnly(EntryPoint = "Initialize", CallConvs = [typeof(CallConvStdcall)])]
     public static void Initialize()
     {
+        _log("Started Initialization");
+        
         try
         {
-            try
-            {
-                _namedPipeServerStream = CreateNamedPipeServer();
-            }
-            catch (Exception ex)
-            {
-                // Double on using the named pipe like a cross-platform mutex. If the named pipe is already taken then don't hook again.
-                _log($"Failed to create named pipe with error: {ex}");
-                return;
-            }
-
-            // Setup a named pipe so we can manage the target fps from another process such as Eve-O Preview.
-            Task.Run(StartPipeServer);
-
-            _log($"Subscribing to EVENT_SYSTEM_FOREGROUND");
-            WinEventHook.StartListening(HandleForegroundChangedEvent);
-
-            _log($"Setup dummy DXGI objects to find the VTable address");
-            using var factory = new Factory1();
-            using var device = new SharpDX.Direct3D11.Device(DriverType.Hardware, DeviceCreationFlags.None);
-            using var swapChain = new SwapChain(factory, device, new SwapChainDescription()
-            {
-                BufferCount = 1,
-                ModeDescription = new ModeDescription(1, 1, new Rational(60, 1), Format.R8G8B8A8_UNorm),
-                Usage = Usage.RenderTargetOutput,
-                OutputHandle = Process.GetCurrentProcess().MainWindowHandle,
-                SampleDescription = new SampleDescription(1, 0),
-                IsWindowed = true
-            });
-
-            void** vTablePointer = *(void***)swapChain.NativePointer;
-
-            _log($"Locating Present should at index 8 for DirectX 11");
-            void** presentEntryPtr = &vTablePointer[8];
-            _originalPresent = (delegate* unmanaged[Stdcall]<IntPtr, uint, uint, int>)*presentEntryPtr;
-
-            // Get some more pointers so we can try and clear the cache and avoid spikes.
-            _dxGetDevice = (delegate* unmanaged[Stdcall]<IntPtr, in Guid, out IntPtr, int>)(*(void***)swapChain.NativePointer)[7];
-            void** deviceVtable = *(void***)device.NativePointer;
-            _dx11GetContext = (delegate* unmanaged[Stdcall]<IntPtr, out IntPtr, void>)deviceVtable[40];
-            void** contextVtable = *(void***)device.ImmediateContext.NativePointer;
-            _dx11Flush = (delegate* unmanaged[Stdcall]<IntPtr, void>)contextVtable[111];
-            _comRelease = (delegate* unmanaged[Stdcall]<IntPtr, uint>)deviceVtable[2];
-
-            // Grant access to the memory address
-            if (VirtualProtect((IntPtr)presentEntryPtr, (UIntPtr)sizeof(nint), PAGE_EXECUTE_READWRITE, out var oldProtect))
-            {
-                _log($"Hooking into Present");
-                *presentEntryPtr = (delegate* unmanaged[Stdcall]<IntPtr, uint, uint, int>)&HookedPresent;
-                // Set the protection back to what it was before we got here.
-                VirtualProtect((IntPtr)presentEntryPtr, (UIntPtr)sizeof(nint), oldProtect, out _);
-            }
-            
-            bool isDx12Game = false;
-            foreach (ProcessModule module in Process.GetCurrentProcess().Modules)
-            {
-                if (module.ModuleName?.ToLower() == "d3d12.dll")
-                {
-                    _log($"Located DirectX 12 module is loaded.");
-                    isDx12Game = true;
-                    break;
-                }
-            }
-
-            if (isDx12Game)
-            {
-                _log($"Locating Present1 should at index 22 for DirectX 12");
-                void** presentEntry22 = &vTablePointer[22];
-                _originalPresent1 = (delegate* unmanaged[Stdcall]<IntPtr, uint, uint, IntPtr, int>)*presentEntry22;
-                
-                // Get some more pointers so we can try and clear the cache and avoid spikes.
-                _dx12GetWaitHandle = (delegate* unmanaged[Stdcall]<IntPtr, IntPtr>)(*(void***)swapChain.NativePointer)[28];
-                
-                if (VirtualProtect((IntPtr)presentEntry22, (UIntPtr)sizeof(nint), PAGE_EXECUTE_READWRITE, out var oldProtectDx12))
-                {
-                    _log($"Hooking into Present1");
-                    *presentEntry22 = (delegate* unmanaged[Stdcall]<IntPtr, uint, uint, IntPtr, int>)&HookedPresent1;
-
-                    VirtualProtect((IntPtr)presentEntry22, (UIntPtr)sizeof(nint), oldProtectDx12, out _);
-                }
-            }
-            _log("0");
-
-            if (QueryPerformanceFrequency(out _qpcFrequency))
-            {
-                // Now you can also accurately set your 16ms target based on real hardware
-                _qpcTicksPer16ms = (long)(_qpcFrequency * 0.016666);
-            }
-
-            //InstallQPCHook();
-            //InstallIATHook();
+            InstallPostEventHook();
         }
         catch (Exception ex)
         {
             _log(ex.ToString());
 
-            try
-            {
-                _namedPipeServerStream.Dispose();
-            }
-            catch
-            {
-                // Just some housekeeping, nothing to do.
-            }
         }
 
         _log("Finished Initialization");
@@ -237,6 +145,284 @@ public unsafe class DxHook
         return IntPtr.Zero;
     }
 
+    private static unsafe void WriteAbsoluteJump(byte* address, IntPtr target)
+    {
+        // FF 25 00 00 00 00 = JMP [RIP+0] 
+        // This tells the CPU to read the 8 bytes immediately following this instruction
+        address[0] = 0xFF;
+        address[1] = 0x25;
+        *(uint*)(address + 2) = 0x00000000; // Offset is 0
+
+        // Write the 64-bit target address starting at address + 6
+        *(IntPtr*)(address + 6) = target;
+    }
+
+    // Ordinal 54 Signature
+    private static delegate* unmanaged[Cdecl]<int, uint, int, int, void> _executeAction;
+
+    // demangled exports
+    // 178   B1 0014A2D0 unsigned int AK::SoundEngine::PostEvent(unsigned int,unsigned __int64,unsigned int,void (__cdecl*)(enum AkCallbackType,struct AkCallbackInfo * __ptr64),void * __ptr64,unsigned int,struct AkExternalSourceInfo * __ptr64,unsigned int)
+    // 179   B2 0014A5D0 unsigned int AK::SoundEngine::PostEvent(char const * __ptr64,unsigned __int64,unsigned int,void (__cdecl*)(enum AkCallbackType,struct AkCallbackInfo * __ptr64),void * __ptr64,unsigned int,struct AkExternalSourceInfo * __ptr64,unsigned int)
+    // 180   B3 0014A700 unsigned int AK::SoundEngine::PostEvent(wchar_t const * __ptr64,unsigned __int64,unsigned int,void (__cdecl*)(enum AkCallbackType,struct AkCallbackInfo * __ptr64),void * __ptr64,unsigned int,struct AkExternalSourceInfo * __ptr64,unsigned int)
+
+    // Export 178 (ID-based)
+    private static delegate* unmanaged[Cdecl]<uint, ulong, uint, IntPtr, IntPtr, uint, IntPtr, uint, uint> _originalPostEventIdBased;
+
+    // Export 179 (Standard String / char*)
+    private static delegate* unmanaged[Cdecl]<IntPtr, ulong, uint, IntPtr, IntPtr, uint, IntPtr, uint, uint> _originalPostEventStringBased;
+
+    // Export 180 (Wide String / wchar_t*)
+    private static delegate* unmanaged[Cdecl]<IntPtr, ulong, uint, IntPtr, IntPtr, uint, IntPtr, uint, uint> _originalPostEventWStringBased;
+
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static uint HookedPostEvent(uint eventID, ulong gameObjectID, uint uFlags, IntPtr pfnCallback, IntPtr pCookie, uint cExternals, IntPtr pExternalSources, uint playingID)
+    {
+        //_log($"eventID {eventID} || gameObjectID {gameObjectID} || uFlags {uFlags} || pfnCallback {pfnCallback} || pCookie {pCookie} || cExternals {cExternals} || pExternalSources {pExternalSources} || playingID {playingID}");
+        var resultId = _originalPostEventIdBased(eventID, gameObjectID, uFlags, pfnCallback, pCookie, cExternals, pExternalSources, playingID);
+        //if ((eventID == 2067668405 || eventID == 2112821019) && resultId != 0)
+        //{
+        //    // Action: 6 (Mute)
+        //    // Transition: 0ms (Instant)
+        //    // Curve: 4 (Linear)
+        //    _executeAction((int)AkActionOnEventType.Mute, resultId, 0, (int)AkCurveInterpolation.Constant);
+
+        //    _log($"[Muted] Action applied to PlayingID: {resultId} (Event: {eventID})");
+        //}
+        _executeAction((int)AkActionOnEventType.Mute, resultId, 0, (int)AkCurveInterpolation.Constant);
+
+        //_log($"[Muted] Action applied to PlayingID: {resultId} (Event: {eventID})");
+
+        return resultId;
+    }
+
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static uint HookedPostEventSb(IntPtr pszEventName, ulong gameObjectID, uint uFlags, IntPtr pfnCallback, IntPtr pCookie, uint cExternals, IntPtr pExternalSources, uint playingID)
+    {
+        string eventName = Marshal.PtrToStringAnsi(pszEventName);
+        
+        _log($"[String Based] pszEventName {eventName} || gameObjectID {gameObjectID} || uFlags {uFlags} || pfnCallback {pfnCallback} || pCookie {pCookie} || cExternals {cExternals} || pExternalSources {pExternalSources} || playingID {playingID}");
+        var resultId = _originalPostEventStringBased(pszEventName, gameObjectID, uFlags, pfnCallback, pCookie, cExternals, pExternalSources, playingID);
+
+        _executeAction((int)AkActionOnEventType.Mute, resultId, 0, (int)AkCurveInterpolation.Constant);
+
+        _log($"[Muted] Action applied to PlayingID: {resultId} (Event: {eventName})");
+
+        return resultId;
+    }
+
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static uint HookedPostEventWSb(IntPtr pszEventName, ulong gameObjectID, uint uFlags, IntPtr pfnCallback, IntPtr pCookie, uint cExternals, IntPtr pExternalSources, uint playingID)
+    {
+        string eventName = Marshal.PtrToStringUni(pszEventName);
+        
+        _log($"[Wide String Based] pszEventName {eventName} || gameObjectID {gameObjectID} || uFlags {uFlags} || pfnCallback {pfnCallback} || pCookie {pCookie} || cExternals {cExternals} || pExternalSources {pExternalSources} || playingID {playingID}");
+        var resultId = _originalPostEventWStringBased(pszEventName, gameObjectID, uFlags, pfnCallback, pCookie, cExternals, pExternalSources, playingID);
+
+        _executeAction((int)AkActionOnEventType.Mute, resultId, 0, (int)AkCurveInterpolation.Constant);
+
+        _log($"[Muted] Action applied to PlayingID: {resultId} (Event: {eventName})");
+
+        return resultId;
+    }
+
+    // Wwise Action Types
+    public enum AkActionOnEventType : int
+    {
+        Stop = 1,
+        Pause = 2,
+        Resume = 3,
+        Break = 4,
+        ReleaseEnvelope = 5,
+        Mute = 6,
+        Unmute = 7
+    }
+
+    public enum AkCurveInterpolation : int
+    {
+        Log3 = 0, // Logarithmic (Curving slowly at first, then fast)
+        Sine = 1, // Sine wave (Smooth start and end)
+        Log1 = 2, // Logarithmic (Faster initial drop than Log3)
+        InvSCurve = 3, // Inversed S-Curve
+        Linear = 4, // Linear (Default straight-line transition)
+        SCurve = 5, // S-Curve (Smooth transition)
+        Exp1 = 6, // Exponential (Slow drop, then accelerates)
+        SineRecip = 7, // Reciprocal of a sine curve
+        Exp3 = 8, // Exponential (Steepest acceleration)
+        Constant = 9  // Constant (Instant jump, no interpolation)
+    }
+
+
+    private static void InstallPostEventHook()
+    {
+        // 1. Find PostEvent 178
+        _log("Locating _audio2.dll PostEvent");
+        var audio2Module = GetModuleHandle("_audio2.dll");
+
+
+
+        IntPtr postEventAddr = GetProcAddress(audio2Module,
+            "?PostEvent@SoundEngine@AK@@YAII_KIP6AXW4AkCallbackType@@PEAUAkCallbackInfo@@@ZPEAXIPEAUAkExternalSourceInfo@@I@Z");
+        _log($"getprocaddress result for id based {postEventAddr}");
+
+        byte* p = (byte*)postEventAddr;
+        string hex = "";
+        for (int i = 0; i < 16; i++)
+        {
+            hex += p[i].ToString("X2") + " ";
+        }
+        _log($"PostEvent Prologue Bytes: {hex}");
+
+        const int STOLEN_BYTES = 7; // mov rax, rsp (3) (the bytes we need) + mov [rax+8], rbx (4) (the bytes to make up 5 bytes we need with 2 spares.)
+
+        _log("Allocate Near");
+        // 2. Allocate Relay within 2GB of AkSoundEngine.dll
+        IntPtr relay = AllocateNear(postEventAddr);
+
+        _log("Relay start");
+        // 3. Setup Trampoline at relay start
+        // [Stolen Bytes (7 bytes)] + [Absolute JMP back to akAddr + 5]
+        byte* r = (byte*)relay;
+        System.Buffer.MemoryCopy((void*)postEventAddr, r, STOLEN_BYTES, STOLEN_BYTES); // Steal exactly 5 bytes
+        WriteAbsoluteJump(r + STOLEN_BYTES, postEventAddr + STOLEN_BYTES);
+        _originalPostEventIdBased = (delegate* unmanaged[Cdecl]<uint, ulong, uint, IntPtr, IntPtr, uint, IntPtr, uint, uint>)r;
+
+        _log("set detour");
+        // 4. Setup Detour at relay + 64 (JMP to your C# Hook)
+        IntPtr hookPtr = (IntPtr)(delegate* unmanaged[Cdecl]<uint, ulong, uint, IntPtr, IntPtr, uint, IntPtr, uint, uint>)&HookedPostEvent;
+        WriteAbsoluteJump(r + 64, hookPtr);
+
+        _log("write");
+        // 5. Final 7-byte patch at AkSoundEngine.dll
+        if (VirtualProtect(postEventAddr, STOLEN_BYTES, PAGE_EXECUTE_READWRITE, out uint old))
+        {
+            int relOffset = (int)((long)(r + 64) - (long)postEventAddr - 5);
+
+            byte* pAk = (byte*)postEventAddr;
+            pAk[0] = 0xE9; // JMP relative
+            *(int*)(pAk + 1) = relOffset;
+
+            // IMPORTANT: Fill the 2 "leftover" bytes with NOPs (0x90)
+            // Since we stole 7 bytes but only used 5 for the JMP.
+            pAk[5] = 0x90;
+            pAk[6] = 0x90;
+
+            VirtualProtect(postEventAddr, STOLEN_BYTES, old, out _);
+        }
+
+
+
+
+
+        const int STOLEN_BYTES2 = 5;
+
+
+        IntPtr postEventAddrS = GetProcAddress(audio2Module,
+    "?PostEvent@SoundEngine@AK@@YAIPEBD_KIP6AXW4AkCallbackType@@PEAUAkCallbackInfo@@@ZPEAXIPEAUAkExternalSourceInfo@@I@Z");
+        _log($"getprocaddress result for string based {postEventAddrS}");
+
+        byte* pS = (byte*)postEventAddrS;
+        string hex2 = "";
+        for (int i = 0; i < 16; i++)
+        {
+            hex2 += pS[i].ToString("X2") + " ";
+        }
+        _log($"PostEvent String Based Prologue Bytes: {hex2}");
+        
+        _log("Allocate Near");
+        // 2. Allocate Relay within 2GB of AkSoundEngine.dll
+        IntPtr relay2 = AllocateNear(postEventAddrS);
+
+        _log("Relay start");
+        // 3. Setup Trampoline at relay start
+        // [Stolen Bytes (7 bytes)] + [Absolute JMP back to akAddr + 5]
+        byte* r2 = (byte*)relay2;
+        System.Buffer.MemoryCopy((void*)postEventAddrS, r2, STOLEN_BYTES2, STOLEN_BYTES2); // Steal exactly 5 bytes
+        WriteAbsoluteJump(r2 + STOLEN_BYTES2, postEventAddrS + STOLEN_BYTES2);
+        _originalPostEventStringBased = (delegate* unmanaged[Cdecl]<IntPtr, ulong, uint, IntPtr, IntPtr, uint, IntPtr, uint, uint>)r2;
+
+        _log("set detour");
+        // 4. Setup Detour at relay + 64 (JMP to your C# Hook)
+        IntPtr hookPtr2 = (IntPtr)(delegate* unmanaged[Cdecl]<IntPtr, ulong, uint, IntPtr, IntPtr, uint, IntPtr, uint, uint>)&HookedPostEventSb;
+        WriteAbsoluteJump(r2 + 64, hookPtr2);
+
+        _log("write");
+        // 5. Final 7-byte patch at AkSoundEngine.dll
+        if (VirtualProtect(postEventAddrS, STOLEN_BYTES2, PAGE_EXECUTE_READWRITE, out uint old2))
+        {
+            int relOffset2 = (int)((long)(r2 + 64) - (long)postEventAddrS - 5);
+
+            byte* pAk2 = (byte*)postEventAddrS;
+            pAk2[0] = 0xE9; // JMP relative
+            *(int*)(pAk2 + 1) = relOffset2;
+            
+            VirtualProtect(postEventAddrS, STOLEN_BYTES2, old2, out _);
+        }
+
+
+
+
+
+
+
+
+        IntPtr postEventAddrWS = GetProcAddress(audio2Module,
+"?PostEvent@SoundEngine@AK@@YAIPEB_W_KIP6AXW4AkCallbackType@@PEAUAkCallbackInfo@@@ZPEAXIPEAUAkExternalSourceInfo@@I@Z");
+        _log($"getprocaddress result for wide string based {postEventAddrWS}");
+
+        byte* pWS = (byte*)postEventAddrWS;
+        string hex3 = "";
+        for (int i = 0; i < 16; i++)
+        {
+            hex3 += pWS[i].ToString("X2") + " ";
+        }
+        _log($"PostEvent Wide String Based Prologue Bytes: {hex3}");
+        
+        _log("Allocate Near");
+        // 2. Allocate Relay within 2GB of AkSoundEngine.dll
+        IntPtr relay3 = AllocateNear(postEventAddrWS);
+
+        _log("Relay start");
+        // 3. Setup Trampoline at relay start
+        // [Stolen Bytes (7 bytes)] + [Absolute JMP back to akAddr + 5]
+        byte* r3 = (byte*)relay3;
+        System.Buffer.MemoryCopy((void*)postEventAddrWS, r3, STOLEN_BYTES2, STOLEN_BYTES2); // Steal exactly 5 bytes
+        WriteAbsoluteJump(r3 + STOLEN_BYTES2, postEventAddrWS + STOLEN_BYTES2);
+        _originalPostEventWStringBased = (delegate* unmanaged[Cdecl]<IntPtr, ulong, uint, IntPtr, IntPtr, uint, IntPtr, uint, uint>)r3;
+
+        _log("set detour");
+        // 4. Setup Detour at relay + 64 (JMP to your C# Hook)
+        IntPtr hookPtr3 = (IntPtr)(delegate* unmanaged[Cdecl]<IntPtr, ulong, uint, IntPtr, IntPtr, uint, IntPtr, uint, uint>)&HookedPostEventWSb;
+        WriteAbsoluteJump(r3 + 64, hookPtr3);
+
+        _log("write");
+        // 5. Final 7-byte patch at AkSoundEngine.dll
+        if (VirtualProtect(postEventAddrWS, STOLEN_BYTES2, PAGE_EXECUTE_READWRITE, out uint old3))
+        {
+            int relOffset3 = (int)((long)(r3 + 64) - (long)postEventAddrWS - 5);
+
+            byte* pAk3 = (byte*)postEventAddrWS;
+            pAk3[0] = 0xE9; // JMP relative
+            *(int*)(pAk3 + 1) = relOffset3;
+            
+            VirtualProtect(postEventAddrWS, STOLEN_BYTES2, old3, out _);
+        }
+
+
+
+
+
+
+
+
+
+        IntPtr executeActionOnPlayingIDAddr = GetProcAddress(audio2Module, "?ExecuteActionOnPlayingID@SoundEngine@AK@@YAXW4AkActionOnEventType@12@IHW4AkCurveInterpolation@@@Z");
+        _executeAction = (delegate* unmanaged[Cdecl]<int, uint, int, int, void>)executeActionOnPlayingIDAddr;
+        if (_executeAction == null)
+        {
+            _log("Could not resolve ExecuteActionOnPlayingID");
+        }
+    }
+    
     private static void InstallQPCHook()
     {
         _log("Locating QPC for patching...");
