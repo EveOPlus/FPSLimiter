@@ -168,62 +168,94 @@ public unsafe class DxHook
     // Export 178 (ID-based)
     private static delegate* unmanaged[Cdecl]<uint, ulong, uint, IntPtr, IntPtr, uint, IntPtr, uint, uint> _originalPostEventIdBased;
 
-    // Export 179 (Standard String / char*)
-    private static delegate* unmanaged[Cdecl]<IntPtr, ulong, uint, IntPtr, IntPtr, uint, IntPtr, uint, uint> _originalPostEventStringBased;
+    //// Export 179 (Standard String / char*)
+    //private static delegate* unmanaged[Cdecl]<IntPtr, ulong, uint, IntPtr, IntPtr, uint, IntPtr, uint, uint> _originalPostEventStringBased;
 
-    // Export 180 (Wide String / wchar_t*)
-    private static delegate* unmanaged[Cdecl]<IntPtr, ulong, uint, IntPtr, IntPtr, uint, IntPtr, uint, uint> _originalPostEventWStringBased;
+    //// Export 180 (Wide String / wchar_t*)
+    //private static delegate* unmanaged[Cdecl]<IntPtr, ulong, uint, IntPtr, IntPtr, uint, IntPtr, uint, uint> _originalPostEventWStringBased;
+
+
+    private const uint msg_MenuActivate_play = 1668343618;
+    private const uint jump_gates_start_play = 3689163958;
+    private const uint jump_gates_exit_play = 1537508544;
+    private const uint jump_gates_lightning_play = 1768044352;
+
+    private const uint ship_engine_S_warpdrive_1st_on = 1659125884;
+    private const uint ship_engine_S_booster_1st_on = 1749375730;
+    
+    private const uint worldobject_jumpgate_state_two_play = 2136228966;
+
+
 
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
     private static uint HookedPostEvent(uint eventID, ulong gameObjectID, uint uFlags, IntPtr pfnCallback, IntPtr pCookie, uint cExternals, IntPtr pExternalSources, uint playingID)
     {
-        //_log($"eventID {eventID} || gameObjectID {gameObjectID} || uFlags {uFlags} || pfnCallback {pfnCallback} || pCookie {pCookie} || cExternals {cExternals} || pExternalSources {pExternalSources} || playingID {playingID}");
+        _log($"eventID {eventID} || gameObjectID {gameObjectID} || uFlags {uFlags} || pfnCallback {pfnCallback} || pCookie {pCookie} || cExternals {cExternals} || pExternalSources {pExternalSources} || playingID {playingID}");
         var resultId = _originalPostEventIdBased(eventID, gameObjectID, uFlags, pfnCallback, pCookie, cExternals, pExternalSources, playingID);
-        //if ((eventID == 2067668405 || eventID == 2112821019) && resultId != 0)
-        //{
-        //    // Action: 6 (Mute)
-        //    // Transition: 0ms (Instant)
-        //    // Curve: 4 (Linear)
-        //    _executeAction((int)AkActionOnEventType.Mute, resultId, 0, (int)AkCurveInterpolation.Constant);
+        if ((eventID == jump_gates_start_play || eventID == jump_gates_exit_play || eventID == jump_gates_lightning_play) && resultId != 0)
+        {
+            _executeAction((int)AkActionOnEventType.Stop, resultId, 0, (int)AkCurveInterpolation.Constant);
 
-        //    _log($"[Muted] Action applied to PlayingID: {resultId} (Event: {eventID})");
-        //}
-        _executeAction((int)AkActionOnEventType.Mute, resultId, 0, (int)AkCurveInterpolation.Constant);
+            _log($"[Muted] Action applied to PlayingID: {resultId} (Event: {eventID})");
+        }
 
-        //_log($"[Muted] Action applied to PlayingID: {resultId} (Event: {eventID})");
 
         return resultId;
     }
+
+    // Returns AKRESULT (int). Parameters: GroupID (uint), StateID (uint)
+    private static delegate* unmanaged[Cdecl]<uint, uint, int> _originalSetState;
 
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
-    private static uint HookedPostEventSb(IntPtr pszEventName, ulong gameObjectID, uint uFlags, IntPtr pfnCallback, IntPtr pCookie, uint cExternals, IntPtr pExternalSources, uint playingID)
+    private static int HookedSetState(uint in_stateGroup, uint in_stateID)
     {
-        string eventName = Marshal.PtrToStringAnsi(pszEventName);
-        
-        _log($"[String Based] pszEventName {eventName} || gameObjectID {gameObjectID} || uFlags {uFlags} || pfnCallback {pfnCallback} || pCookie {pCookie} || cExternals {cExternals} || pExternalSources {pExternalSources} || playingID {playingID}");
-        var resultId = _originalPostEventStringBased(pszEventName, gameObjectID, uFlags, pfnCallback, pCookie, cExternals, pExternalSources, playingID);
+            _log($"[State Log] Group: {in_stateGroup} | Requested ID: {in_stateID}");
 
-        _executeAction((int)AkActionOnEventType.Mute, resultId, 0, (int)AkCurveInterpolation.Constant);
+            
+            // Block these two specific groups entirely
+        if (in_stateGroup == 1360507279 || in_stateGroup == 2164173825)
+        {
+            _log($"[State Blocked] Group: {in_stateGroup} | Requested ID: {in_stateID}");
 
-        _log($"[Muted] Action applied to PlayingID: {resultId} (Event: {eventName})");
+            return 1;
+        }
 
-        return resultId;
+        // Let everything else through (UI, Combat, Music states)
+        return _originalSetState(in_stateGroup, in_stateID);
     }
+    
+    
+    
 
-    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
-    private static uint HookedPostEventWSb(IntPtr pszEventName, ulong gameObjectID, uint uFlags, IntPtr pfnCallback, IntPtr pCookie, uint cExternals, IntPtr pExternalSources, uint playingID)
-    {
-        string eventName = Marshal.PtrToStringUni(pszEventName);
-        
-        _log($"[Wide String Based] pszEventName {eventName} || gameObjectID {gameObjectID} || uFlags {uFlags} || pfnCallback {pfnCallback} || pCookie {pCookie} || cExternals {cExternals} || pExternalSources {pExternalSources} || playingID {playingID}");
-        var resultId = _originalPostEventWStringBased(pszEventName, gameObjectID, uFlags, pfnCallback, pCookie, cExternals, pExternalSources, playingID);
+    //[UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    //private static uint HookedPostEventSb(IntPtr pszEventName, ulong gameObjectID, uint uFlags, IntPtr pfnCallback, IntPtr pCookie, uint cExternals, IntPtr pExternalSources, uint playingID)
+    //{
+    //    string eventName = Marshal.PtrToStringAnsi(pszEventName);
 
-        _executeAction((int)AkActionOnEventType.Mute, resultId, 0, (int)AkCurveInterpolation.Constant);
+    //    _log($"[String Based] pszEventName {eventName} || gameObjectID {gameObjectID} || uFlags {uFlags} || pfnCallback {pfnCallback} || pCookie {pCookie} || cExternals {cExternals} || pExternalSources {pExternalSources} || playingID {playingID}");
+    //    var resultId = _originalPostEventStringBased(pszEventName, gameObjectID, uFlags, pfnCallback, pCookie, cExternals, pExternalSources, playingID);
 
-        _log($"[Muted] Action applied to PlayingID: {resultId} (Event: {eventName})");
+    //    _executeAction((int)AkActionOnEventType.Mute, resultId, 0, (int)AkCurveInterpolation.Constant);
 
-        return resultId;
-    }
+    //    _log($"[Muted] Action applied to PlayingID: {resultId} (Event: {eventName})");
+
+    //    return resultId;
+    //}
+
+    //[UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    //private static uint HookedPostEventWSb(IntPtr pszEventName, ulong gameObjectID, uint uFlags, IntPtr pfnCallback, IntPtr pCookie, uint cExternals, IntPtr pExternalSources, uint playingID)
+    //{
+    //    string eventName = Marshal.PtrToStringUni(pszEventName);
+
+    //    _log($"[Wide String Based] pszEventName {eventName} || gameObjectID {gameObjectID} || uFlags {uFlags} || pfnCallback {pfnCallback} || pCookie {pCookie} || cExternals {cExternals} || pExternalSources {pExternalSources} || playingID {playingID}");
+    //    var resultId = _originalPostEventWStringBased(pszEventName, gameObjectID, uFlags, pfnCallback, pCookie, cExternals, pExternalSources, playingID);
+
+    //    _executeAction((int)AkActionOnEventType.Mute, resultId, 0, (int)AkCurveInterpolation.Constant);
+
+    //    _log($"[Muted] Action applied to PlayingID: {resultId} (Event: {eventName})");
+
+    //    return resultId;
+    //}
 
     // Wwise Action Types
     public enum AkActionOnEventType : int
@@ -280,58 +312,279 @@ public unsafe class DxHook
         return _originalDynamicPlay(playingID, uTransitionDuration, eFadeCurve);
     }
 
+    //private static void InstallPostEventHook()
+    //{
+    //    // 1. Find PostEvent 178
+    //    _log("Locating _audio2.dll Play DynamicSequence");
+    //    var audio2Module = GetModuleHandle("_audio2.dll");
+
+
+
+    //    IntPtr playAddr = GetProcAddress(audio2Module,
+    //        "?Play@DynamicSequence@SoundEngine@AK@@YA?AW4AKRESULT@@IHW4AkCurveInterpolation@@@Z");
+    //    _log($"GetProcAddress result for Play DynamicSequence {playAddr}");
+
+    //    byte* p = (byte*)playAddr;
+    //    string hex = "";
+    //    for (int i = 0; i < 16; i++)
+    //    {
+    //        hex += p[i].ToString("X2") + " ";
+    //    }
+    //    _log($"Play DynamicSequence Prologue Bytes: {hex}");
+
+    //    const int STOLEN_BYTES = 5; // 48 89 74 24 10 — mov [rsp+10h], rsi (5 bytes)
+
+    //    _log("Allocate Near");
+    //    // 2. Allocate Relay within 2GB of AkSoundEngine.dll
+    //    IntPtr relay = AllocateNear(playAddr);
+
+    //    _log("Relay start");
+    //    // 3. Setup Trampoline at relay start
+    //    // [Stolen Bytes (7 bytes)] + [Absolute JMP back to akAddr + 5]
+    //    byte* r = (byte*)relay;
+    //    System.Buffer.MemoryCopy((void*)playAddr, r, STOLEN_BYTES, STOLEN_BYTES); // Steal exactly 5 bytes
+    //    WriteAbsoluteJump(r + STOLEN_BYTES, playAddr + STOLEN_BYTES);
+    //    _originalDynamicPlay = (delegate* unmanaged[Cdecl]<uint, int, int, int>)r;
+
+
+    //    _log("set detour");
+    //    // 4. Setup Detour at relay + 64 (JMP to your C# Hook)
+    //    IntPtr hookPtr = (IntPtr)(delegate* unmanaged[Cdecl]<uint, int, int, int>)&HookedDynamicPlay;
+    //    WriteAbsoluteJump(r + 64, hookPtr);
+
+    //    _log("write");
+    //    // 5. Final 7-byte patch at AkSoundEngine.dll
+    //    if (VirtualProtect(playAddr, (UIntPtr)STOLEN_BYTES, PAGE_EXECUTE_READWRITE, out uint old))
+    //    {
+    //        int relOffset = (int)((long)(r + 64) - (long)playAddr - 5);
+
+    //        byte* pAk = (byte*)playAddr;
+    //        pAk[0] = 0xE9; // JMP relative
+    //        *(int*)(pAk + 1) = relOffset;
+
+    //        VirtualProtect(playAddr, (UIntPtr)STOLEN_BYTES, old, out _);
+    //    }
+
+
+
+
+    //    IntPtr executeActionOnPlayingIDAddr = GetProcAddress(audio2Module, "?ExecuteActionOnPlayingID@SoundEngine@AK@@YAXW4AkActionOnEventType@12@IHW4AkCurveInterpolation@@@Z");
+    //    _executeAction = (delegate* unmanaged[Cdecl]<int, uint, int, int, void>)executeActionOnPlayingIDAddr;
+    //    if (_executeAction == null)
+    //    {
+    //        _log("Could not resolve ExecuteActionOnPlayingID");
+    //    }
+    //}
+
+
     private static void InstallPostEventHook()
     {
         // 1. Find PostEvent 178
-        _log("Locating _audio2.dll Play DynamicSequence");
+        _log("Locating _audio2.dll PostEvent");
         var audio2Module = GetModuleHandle("_audio2.dll");
 
 
 
-        IntPtr playAddr = GetProcAddress(audio2Module,
-            "?Play@DynamicSequence@SoundEngine@AK@@YA?AW4AKRESULT@@IHW4AkCurveInterpolation@@@Z");
-        _log($"GetProcAddress result for Play DynamicSequence {playAddr}");
+        IntPtr postEventAddr = GetProcAddress(audio2Module,
+            "?PostEvent@SoundEngine@AK@@YAII_KIP6AXW4AkCallbackType@@PEAUAkCallbackInfo@@@ZPEAXIPEAUAkExternalSourceInfo@@I@Z");
+        _log($"getprocaddress result for id based {postEventAddr}");
 
-        byte* p = (byte*)playAddr;
+        byte* p = (byte*)postEventAddr;
         string hex = "";
         for (int i = 0; i < 16; i++)
         {
             hex += p[i].ToString("X2") + " ";
         }
-        _log($"Play DynamicSequence Prologue Bytes: {hex}");
-        
-        const int STOLEN_BYTES = 5; // 48 89 74 24 10 — mov [rsp+10h], rsi (5 bytes)
-        
+        _log($"PostEvent Prologue Bytes: {hex}");
+
+        const int STOLEN_BYTES = 7; // mov rax, rsp (3) (the bytes we need) + mov [rax+8], rbx (4) (the bytes to make up 5 bytes we need with 2 spares.)
+
         _log("Allocate Near");
         // 2. Allocate Relay within 2GB of AkSoundEngine.dll
-        IntPtr relay = AllocateNear(playAddr);
-        
+        IntPtr relay = AllocateNear(postEventAddr);
+
         _log("Relay start");
         // 3. Setup Trampoline at relay start
         // [Stolen Bytes (7 bytes)] + [Absolute JMP back to akAddr + 5]
         byte* r = (byte*)relay;
-        System.Buffer.MemoryCopy((void*)playAddr, r, STOLEN_BYTES, STOLEN_BYTES); // Steal exactly 5 bytes
-        WriteAbsoluteJump(r + STOLEN_BYTES, playAddr + STOLEN_BYTES);
-        _originalDynamicPlay = (delegate* unmanaged[Cdecl]<uint, int, int, int>)r;
+        System.Buffer.MemoryCopy((void*)postEventAddr, r, STOLEN_BYTES, STOLEN_BYTES); // Steal exactly 5 bytes
+        WriteAbsoluteJump(r + STOLEN_BYTES, postEventAddr + STOLEN_BYTES);
+        _originalPostEventIdBased = (delegate* unmanaged[Cdecl]<uint, ulong, uint, IntPtr, IntPtr, uint, IntPtr, uint, uint>)r;
+
+        _log("set detour");
+        // 4. Setup Detour at relay + 64 (JMP to your C# Hook)
+        IntPtr hookPtr = (IntPtr)(delegate* unmanaged[Cdecl]<uint, ulong, uint, IntPtr, IntPtr, uint, IntPtr, uint, uint>)&HookedPostEvent;
+        WriteAbsoluteJump(r + 64, hookPtr);
+
+        _log("write");
+        // 5. Final 7-byte patch at AkSoundEngine.dll
+        if (VirtualProtect(postEventAddr, STOLEN_BYTES, PAGE_EXECUTE_READWRITE, out uint old))
+        {
+            int relOffset = (int)((long)(r + 64) - (long)postEventAddr - 5);
+
+            byte* pAk = (byte*)postEventAddr;
+            pAk[0] = 0xE9; // JMP relative
+            *(int*)(pAk + 1) = relOffset;
+
+            // IMPORTANT: Fill the 2 "leftover" bytes with NOPs (0x90)
+            // Since we stole 7 bytes but only used 5 for the JMP.
+            pAk[5] = 0x90;
+            pAk[6] = 0x90;
+
+            VirtualProtect(postEventAddr, STOLEN_BYTES, old, out _);
+        }
+
+
+
+
+
+        IntPtr setStateAddr = GetProcAddress(audio2Module,
+            "?SetState@SoundEngine@AK@@YA?AW4AKRESULT@@II@Z");
+        _log($"getprocaddress result for SetState {setStateAddr}");
         
+        byte* p2 = (byte*)setStateAddr;
+        string hex2 = "";
+        for (int i = 0; i < 16; i++)
+        {
+            hex2 += p2[i].ToString("X2") + " ";
+        }
+        _log($"setState Prologue Bytes: {hex2}");
+
+        const int STOLEN_BYTES2 = 5; // 48 89 5C 24 08 — mov [rsp+8], rbx (Exactly 5 bytes)
+
+        _log("Allocate Near");
+        // 2. Allocate Relay within 2GB of AkSoundEngine.dll
+        IntPtr relay2 = AllocateNear(setStateAddr);
+        
+        _log("Relay start");
+        // 3. Setup Trampoline at relay start
+        // [Stolen Bytes (5 bytes)] + [Absolute JMP back to akAddr + 5]
+        byte* r2 = (byte*)relay2;
+        System.Buffer.MemoryCopy((void*)setStateAddr, r2, STOLEN_BYTES2, STOLEN_BYTES2); // Steal exactly 5 bytes
+        WriteAbsoluteJump(r2 + STOLEN_BYTES2, setStateAddr + STOLEN_BYTES2);
+        _originalSetState = (delegate* unmanaged[Cdecl]<uint, uint, int>)r2;
         
         _log("set detour");
         // 4. Setup Detour at relay + 64 (JMP to your C# Hook)
-        IntPtr hookPtr = (IntPtr)(delegate* unmanaged[Cdecl]<uint, int, int, int>)&HookedDynamicPlay;
-        WriteAbsoluteJump(r + 64, hookPtr);
+        IntPtr hookPtr2 = (IntPtr)(delegate* unmanaged[Cdecl]<uint, uint, int>)&HookedSetState;
+        WriteAbsoluteJump(r2 + 64, hookPtr2);
         
         _log("write");
         // 5. Final 7-byte patch at AkSoundEngine.dll
-        if (VirtualProtect(playAddr, (UIntPtr)STOLEN_BYTES, PAGE_EXECUTE_READWRITE, out uint old))
+        if (VirtualProtect(setStateAddr, STOLEN_BYTES2, PAGE_EXECUTE_READWRITE, out uint old2))
         {
-            int relOffset = (int)((long)(r + 64) - (long)playAddr - 5);
+            int relOffset = (int)((long)(r2 + 64) - (long)setStateAddr - 5);
         
-            byte* pAk = (byte*)playAddr;
-            pAk[0] = 0xE9; // JMP relative
-            *(int*)(pAk + 1) = relOffset;
+            byte* pAk2 = (byte*)setStateAddr;
+            pAk2[0] = 0xE9; // JMP relative
+            *(int*)(pAk2 + 1) = relOffset;
         
-            VirtualProtect(playAddr, (UIntPtr)STOLEN_BYTES, old, out _);
+            VirtualProtect(setStateAddr, STOLEN_BYTES2, old2, out _);
         }
+
+
+
+
+
+
+        //        const int STOLEN_BYTES2 = 5;
+
+
+        //        IntPtr postEventAddrS = GetProcAddress(audio2Module,
+        //    "?PostEvent@SoundEngine@AK@@YAIPEBD_KIP6AXW4AkCallbackType@@PEAUAkCallbackInfo@@@ZPEAXIPEAUAkExternalSourceInfo@@I@Z");
+        //        _log($"getprocaddress result for string based {postEventAddrS}");
+
+        //        byte* pS = (byte*)postEventAddrS;
+        //        string hex2 = "";
+        //        for (int i = 0; i < 16; i++)
+        //        {
+        //            hex2 += pS[i].ToString("X2") + " ";
+        //        }
+        //        _log($"PostEvent String Based Prologue Bytes: {hex2}");
+
+        //        _log("Allocate Near");
+        //        // 2. Allocate Relay within 2GB of AkSoundEngine.dll
+        //        IntPtr relay2 = AllocateNear(postEventAddrS);
+
+        //        _log("Relay start");
+        //        // 3. Setup Trampoline at relay start
+        //        // [Stolen Bytes (7 bytes)] + [Absolute JMP back to akAddr + 5]
+        //        byte* r2 = (byte*)relay2;
+        //        System.Buffer.MemoryCopy((void*)postEventAddrS, r2, STOLEN_BYTES2, STOLEN_BYTES2); // Steal exactly 5 bytes
+        //        WriteAbsoluteJump(r2 + STOLEN_BYTES2, postEventAddrS + STOLEN_BYTES2);
+        //        _originalPostEventStringBased = (delegate* unmanaged[Cdecl]<IntPtr, ulong, uint, IntPtr, IntPtr, uint, IntPtr, uint, uint>)r2;
+
+        //        _log("set detour");
+        //        // 4. Setup Detour at relay + 64 (JMP to your C# Hook)
+        //        IntPtr hookPtr2 = (IntPtr)(delegate* unmanaged[Cdecl]<IntPtr, ulong, uint, IntPtr, IntPtr, uint, IntPtr, uint, uint>)&HookedPostEventSb;
+        //        WriteAbsoluteJump(r2 + 64, hookPtr2);
+
+        //        _log("write");
+        //        // 5. Final 7-byte patch at AkSoundEngine.dll
+        //        if (VirtualProtect(postEventAddrS, STOLEN_BYTES2, PAGE_EXECUTE_READWRITE, out uint old2))
+        //        {
+        //            int relOffset2 = (int)((long)(r2 + 64) - (long)postEventAddrS - 5);
+
+        //            byte* pAk2 = (byte*)postEventAddrS;
+        //            pAk2[0] = 0xE9; // JMP relative
+        //            *(int*)(pAk2 + 1) = relOffset2;
+
+        //            VirtualProtect(postEventAddrS, STOLEN_BYTES2, old2, out _);
+        //        }
+
+
+
+
+
+
+
+
+        //        IntPtr postEventAddrWS = GetProcAddress(audio2Module,
+        //"?PostEvent@SoundEngine@AK@@YAIPEB_W_KIP6AXW4AkCallbackType@@PEAUAkCallbackInfo@@@ZPEAXIPEAUAkExternalSourceInfo@@I@Z");
+        //        _log($"getprocaddress result for wide string based {postEventAddrWS}");
+
+        //        byte* pWS = (byte*)postEventAddrWS;
+        //        string hex3 = "";
+        //        for (int i = 0; i < 16; i++)
+        //        {
+        //            hex3 += pWS[i].ToString("X2") + " ";
+        //        }
+        //        _log($"PostEvent Wide String Based Prologue Bytes: {hex3}");
+
+        //        _log("Allocate Near");
+        //        // 2. Allocate Relay within 2GB of AkSoundEngine.dll
+        //        IntPtr relay3 = AllocateNear(postEventAddrWS);
+
+        //        _log("Relay start");
+        //        // 3. Setup Trampoline at relay start
+        //        // [Stolen Bytes (7 bytes)] + [Absolute JMP back to akAddr + 5]
+        //        byte* r3 = (byte*)relay3;
+        //        System.Buffer.MemoryCopy((void*)postEventAddrWS, r3, STOLEN_BYTES2, STOLEN_BYTES2); // Steal exactly 5 bytes
+        //        WriteAbsoluteJump(r3 + STOLEN_BYTES2, postEventAddrWS + STOLEN_BYTES2);
+        //        _originalPostEventWStringBased = (delegate* unmanaged[Cdecl]<IntPtr, ulong, uint, IntPtr, IntPtr, uint, IntPtr, uint, uint>)r3;
+
+        //        _log("set detour");
+        //        // 4. Setup Detour at relay + 64 (JMP to your C# Hook)
+        //        IntPtr hookPtr3 = (IntPtr)(delegate* unmanaged[Cdecl]<IntPtr, ulong, uint, IntPtr, IntPtr, uint, IntPtr, uint, uint>)&HookedPostEventWSb;
+        //        WriteAbsoluteJump(r3 + 64, hookPtr3);
+
+        //        _log("write");
+        //        // 5. Final 7-byte patch at AkSoundEngine.dll
+        //        if (VirtualProtect(postEventAddrWS, STOLEN_BYTES2, PAGE_EXECUTE_READWRITE, out uint old3))
+        //        {
+        //            int relOffset3 = (int)((long)(r3 + 64) - (long)postEventAddrWS - 5);
+
+        //            byte* pAk3 = (byte*)postEventAddrWS;
+        //            pAk3[0] = 0xE9; // JMP relative
+        //            *(int*)(pAk3 + 1) = relOffset3;
+
+        //            VirtualProtect(postEventAddrWS, STOLEN_BYTES2, old3, out _);
+        //        }
+
+
+
+
+
 
 
 
@@ -343,178 +596,6 @@ public unsafe class DxHook
             _log("Could not resolve ExecuteActionOnPlayingID");
         }
     }
-
-
-    //    private static void InstallPostEventHook()
-    //    {
-    //        // 1. Find PostEvent 178
-    //        _log("Locating _audio2.dll PostEvent");
-    //        var audio2Module = GetModuleHandle("_audio2.dll");
-
-
-
-    //        IntPtr postEventAddr = GetProcAddress(audio2Module,
-    //            "?PostEvent@SoundEngine@AK@@YAII_KIP6AXW4AkCallbackType@@PEAUAkCallbackInfo@@@ZPEAXIPEAUAkExternalSourceInfo@@I@Z");
-    //        _log($"getprocaddress result for id based {postEventAddr}");
-
-    //        byte* p = (byte*)postEventAddr;
-    //        string hex = "";
-    //        for (int i = 0; i < 16; i++)
-    //        {
-    //            hex += p[i].ToString("X2") + " ";
-    //        }
-    //        _log($"PostEvent Prologue Bytes: {hex}");
-
-    //        const int STOLEN_BYTES = 7; // mov rax, rsp (3) (the bytes we need) + mov [rax+8], rbx (4) (the bytes to make up 5 bytes we need with 2 spares.)
-
-    //        _log("Allocate Near");
-    //        // 2. Allocate Relay within 2GB of AkSoundEngine.dll
-    //        IntPtr relay = AllocateNear(postEventAddr);
-
-    //        _log("Relay start");
-    //        // 3. Setup Trampoline at relay start
-    //        // [Stolen Bytes (7 bytes)] + [Absolute JMP back to akAddr + 5]
-    //        byte* r = (byte*)relay;
-    //        System.Buffer.MemoryCopy((void*)postEventAddr, r, STOLEN_BYTES, STOLEN_BYTES); // Steal exactly 5 bytes
-    //        WriteAbsoluteJump(r + STOLEN_BYTES, postEventAddr + STOLEN_BYTES);
-    //        _originalPostEventIdBased = (delegate* unmanaged[Cdecl]<uint, ulong, uint, IntPtr, IntPtr, uint, IntPtr, uint, uint>)r;
-
-    //        _log("set detour");
-    //        // 4. Setup Detour at relay + 64 (JMP to your C# Hook)
-    //        IntPtr hookPtr = (IntPtr)(delegate* unmanaged[Cdecl]<uint, ulong, uint, IntPtr, IntPtr, uint, IntPtr, uint, uint>)&HookedPostEvent;
-    //        WriteAbsoluteJump(r + 64, hookPtr);
-
-    //        _log("write");
-    //        // 5. Final 7-byte patch at AkSoundEngine.dll
-    //        if (VirtualProtect(postEventAddr, STOLEN_BYTES, PAGE_EXECUTE_READWRITE, out uint old))
-    //        {
-    //            int relOffset = (int)((long)(r + 64) - (long)postEventAddr - 5);
-
-    //            byte* pAk = (byte*)postEventAddr;
-    //            pAk[0] = 0xE9; // JMP relative
-    //            *(int*)(pAk + 1) = relOffset;
-
-    //            // IMPORTANT: Fill the 2 "leftover" bytes with NOPs (0x90)
-    //            // Since we stole 7 bytes but only used 5 for the JMP.
-    //            pAk[5] = 0x90;
-    //            pAk[6] = 0x90;
-
-    //            VirtualProtect(postEventAddr, STOLEN_BYTES, old, out _);
-    //        }
-
-
-
-
-
-    //        const int STOLEN_BYTES2 = 5;
-
-
-    //        IntPtr postEventAddrS = GetProcAddress(audio2Module,
-    //    "?PostEvent@SoundEngine@AK@@YAIPEBD_KIP6AXW4AkCallbackType@@PEAUAkCallbackInfo@@@ZPEAXIPEAUAkExternalSourceInfo@@I@Z");
-    //        _log($"getprocaddress result for string based {postEventAddrS}");
-
-    //        byte* pS = (byte*)postEventAddrS;
-    //        string hex2 = "";
-    //        for (int i = 0; i < 16; i++)
-    //        {
-    //            hex2 += pS[i].ToString("X2") + " ";
-    //        }
-    //        _log($"PostEvent String Based Prologue Bytes: {hex2}");
-
-    //        _log("Allocate Near");
-    //        // 2. Allocate Relay within 2GB of AkSoundEngine.dll
-    //        IntPtr relay2 = AllocateNear(postEventAddrS);
-
-    //        _log("Relay start");
-    //        // 3. Setup Trampoline at relay start
-    //        // [Stolen Bytes (7 bytes)] + [Absolute JMP back to akAddr + 5]
-    //        byte* r2 = (byte*)relay2;
-    //        System.Buffer.MemoryCopy((void*)postEventAddrS, r2, STOLEN_BYTES2, STOLEN_BYTES2); // Steal exactly 5 bytes
-    //        WriteAbsoluteJump(r2 + STOLEN_BYTES2, postEventAddrS + STOLEN_BYTES2);
-    //        _originalPostEventStringBased = (delegate* unmanaged[Cdecl]<IntPtr, ulong, uint, IntPtr, IntPtr, uint, IntPtr, uint, uint>)r2;
-
-    //        _log("set detour");
-    //        // 4. Setup Detour at relay + 64 (JMP to your C# Hook)
-    //        IntPtr hookPtr2 = (IntPtr)(delegate* unmanaged[Cdecl]<IntPtr, ulong, uint, IntPtr, IntPtr, uint, IntPtr, uint, uint>)&HookedPostEventSb;
-    //        WriteAbsoluteJump(r2 + 64, hookPtr2);
-
-    //        _log("write");
-    //        // 5. Final 7-byte patch at AkSoundEngine.dll
-    //        if (VirtualProtect(postEventAddrS, STOLEN_BYTES2, PAGE_EXECUTE_READWRITE, out uint old2))
-    //        {
-    //            int relOffset2 = (int)((long)(r2 + 64) - (long)postEventAddrS - 5);
-
-    //            byte* pAk2 = (byte*)postEventAddrS;
-    //            pAk2[0] = 0xE9; // JMP relative
-    //            *(int*)(pAk2 + 1) = relOffset2;
-
-    //            VirtualProtect(postEventAddrS, STOLEN_BYTES2, old2, out _);
-    //        }
-
-
-
-
-
-
-
-
-    //        IntPtr postEventAddrWS = GetProcAddress(audio2Module,
-    //"?PostEvent@SoundEngine@AK@@YAIPEB_W_KIP6AXW4AkCallbackType@@PEAUAkCallbackInfo@@@ZPEAXIPEAUAkExternalSourceInfo@@I@Z");
-    //        _log($"getprocaddress result for wide string based {postEventAddrWS}");
-
-    //        byte* pWS = (byte*)postEventAddrWS;
-    //        string hex3 = "";
-    //        for (int i = 0; i < 16; i++)
-    //        {
-    //            hex3 += pWS[i].ToString("X2") + " ";
-    //        }
-    //        _log($"PostEvent Wide String Based Prologue Bytes: {hex3}");
-
-    //        _log("Allocate Near");
-    //        // 2. Allocate Relay within 2GB of AkSoundEngine.dll
-    //        IntPtr relay3 = AllocateNear(postEventAddrWS);
-
-    //        _log("Relay start");
-    //        // 3. Setup Trampoline at relay start
-    //        // [Stolen Bytes (7 bytes)] + [Absolute JMP back to akAddr + 5]
-    //        byte* r3 = (byte*)relay3;
-    //        System.Buffer.MemoryCopy((void*)postEventAddrWS, r3, STOLEN_BYTES2, STOLEN_BYTES2); // Steal exactly 5 bytes
-    //        WriteAbsoluteJump(r3 + STOLEN_BYTES2, postEventAddrWS + STOLEN_BYTES2);
-    //        _originalPostEventWStringBased = (delegate* unmanaged[Cdecl]<IntPtr, ulong, uint, IntPtr, IntPtr, uint, IntPtr, uint, uint>)r3;
-
-    //        _log("set detour");
-    //        // 4. Setup Detour at relay + 64 (JMP to your C# Hook)
-    //        IntPtr hookPtr3 = (IntPtr)(delegate* unmanaged[Cdecl]<IntPtr, ulong, uint, IntPtr, IntPtr, uint, IntPtr, uint, uint>)&HookedPostEventWSb;
-    //        WriteAbsoluteJump(r3 + 64, hookPtr3);
-
-    //        _log("write");
-    //        // 5. Final 7-byte patch at AkSoundEngine.dll
-    //        if (VirtualProtect(postEventAddrWS, STOLEN_BYTES2, PAGE_EXECUTE_READWRITE, out uint old3))
-    //        {
-    //            int relOffset3 = (int)((long)(r3 + 64) - (long)postEventAddrWS - 5);
-
-    //            byte* pAk3 = (byte*)postEventAddrWS;
-    //            pAk3[0] = 0xE9; // JMP relative
-    //            *(int*)(pAk3 + 1) = relOffset3;
-
-    //            VirtualProtect(postEventAddrWS, STOLEN_BYTES2, old3, out _);
-    //        }
-
-
-
-
-
-
-
-
-
-    //        IntPtr executeActionOnPlayingIDAddr = GetProcAddress(audio2Module, "?ExecuteActionOnPlayingID@SoundEngine@AK@@YAXW4AkActionOnEventType@12@IHW4AkCurveInterpolation@@@Z");
-    //        _executeAction = (delegate* unmanaged[Cdecl]<int, uint, int, int, void>)executeActionOnPlayingIDAddr;
-    //        if (_executeAction == null)
-    //        {
-    //            _log("Could not resolve ExecuteActionOnPlayingID");
-    //        }
-    //    }
 
     private static void InstallQPCHook()
     {
