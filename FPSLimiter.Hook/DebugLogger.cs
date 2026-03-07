@@ -1,17 +1,27 @@
-﻿using SharpDX.Direct3D11;
-using System.Diagnostics;
-using System.Runtime.InteropServices;
-using System.Text;
+﻿using System.Diagnostics;
 
 namespace FPSLimiter.Hook;
 
-public static class DebugLogger
+internal static class DebugLogger
 {
-    [DllImport("kernel32.dll", CharSet = CharSet.Auto)]
-    private static extern void OutputDebugString(string lpOutputString);
-
-    public static void WriteLine(string outputString, IntPtr myHandle)
+    private static readonly IntPtr MainHandle = Process.GetCurrentProcess().MainWindowHandle;
+    public static void Info(string message)
     {
-        OutputDebugString($"[FPS_LIMITER] [{myHandle}] {outputString}");
+        NativeMethods.OutputDebugString($"[EVE-O HOOK] [PID {MainHandle}] [INFO] {message}");
+    }
+
+    public static void Error(string message)
+    {
+        NativeMethods.OutputDebugString($"[EVE-O HOOK] [{MainHandle}] [ERROR] {message}");
+    }
+
+    public static void Error(Exception ex)
+    {
+        Error(ex.ToString());
+    }
+
+    public static void Error(Exception ex, string message)
+    {
+        Error($"{message}: {ex}");
     }
 }

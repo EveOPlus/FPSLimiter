@@ -1,6 +1,6 @@
 ﻿namespace FPSLimiter.Hook;
 
-public enum FocusType
+internal enum FocusType
 {
     Background,
     Foreground,

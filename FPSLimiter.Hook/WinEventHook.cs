@@ -2,7 +2,7 @@
 
 namespace FPSLimiter.Hook;
 
-public static unsafe class WinEventHook
+internal static unsafe class WinEventHook
 {
     private const uint EVENT_SYSTEM_FOREGROUND = 0x0003;
     private const uint WINEVENT_OUTOFCONTEXT = 0;

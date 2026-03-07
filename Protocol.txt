@@ -1,0 +1,20 @@
+┌─────────────────────────────────────────────────────────────┐
+│                    PIPE COMMUNICATION FLOW                  │
+├─────────────────────────────────────────────────────────────┤
+│  First Byte (Direction)    Second Byte (Command Type)       │
+│  ───────────────────      ─────────────────────────         │
+│                                                             │
+│  0xA3 (Fire & Forget) ──→  0xB1: Set Focused               │
+│                            0xB3: Predict Focus              │
+│                                                             │
+│  0xA2 (Update Direction) ──→ 0xB4: Claim Ownership          │
+│                           0xF1: Target FPS Focus           │
+│                           0xC1: Unmute All Sounds          │
+│                           0xC2: Unmute Sound List          │
+│                           0xC3: Mute Sound List            │
+│                                                             │
+│  0xA1 (Query Direction) ──→ 0xA1: Query FPS Settings       │
+│                          0xB2: Ping Request                │
+│                          0xC4: Get Muted Sounds            │
+│                          0xC5: Event History               │
+└─────────────────────────────────────────────────────────────┘

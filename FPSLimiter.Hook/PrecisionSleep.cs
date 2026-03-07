@@ -2,7 +2,7 @@
 
 using System.Runtime.InteropServices;
 
-public unsafe class PrecisionSleep
+internal unsafe class PrecisionSleep
 {
     private readonly IntPtr _timerHandle;
     private const uint CREATE_WAITABLE_TIMER_HIGH_RESOLUTION = 0x00000002;
