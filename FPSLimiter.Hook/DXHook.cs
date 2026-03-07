@@ -179,6 +179,11 @@ public unsafe class DxHook
         {
             _ignoreNextLostFocus = true;
         }
+
+        if (OwnerProcessId != -1 && newFocus == FocusType.Foreground)
+        {
+            NativeMethods.AllowSetForegroundWindow(OwnerProcessId);
+        }
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]

@@ -43,7 +43,7 @@ internal static unsafe class WinEventHook
 
     private static void RunHookListener()
     {
-        IntPtr hook = SetWinEventHook(
+        IntPtr hook = NativeMethods.SetWinEventHook(
             EVENT_SYSTEM_FOREGROUND,
             EVENT_SYSTEM_FOREGROUND,
             IntPtr.Zero,
@@ -53,18 +53,7 @@ internal static unsafe class WinEventHook
         if (hook == IntPtr.Zero) return;
 
         // This loop blocks the BACKGROUND thread, waiting for OS notifications
-        MSG msg;
-        while (GetMessage(out msg, IntPtr.Zero, 0, 0)) { }
+        NativeMethods.MSG msg;
+        while (NativeMethods.GetMessage(out msg, IntPtr.Zero, 0, 0)) { }
     }
-
-    [DllImport("user32.dll")]
-    static extern IntPtr SetWinEventHook(uint eventMin, uint eventMax, IntPtr hmodWinEventProc,
-        delegate* unmanaged<IntPtr, uint, IntPtr, int, int, uint, uint, void> pfnWinEventProc,
-        uint idProcess, uint idThread, uint dwFlags);
-
-    [DllImport("user32.dll")]
-    static extern bool GetMessage(out MSG lpMsg, IntPtr hWnd, uint wMsgFilterMin, uint wMsgFilterMax);
-
-    [StructLayout(LayoutKind.Sequential)]
-    struct MSG { IntPtr hwnd; uint message; IntPtr wParam; IntPtr lParam; uint time; int ptX; int ptY; }
 }
