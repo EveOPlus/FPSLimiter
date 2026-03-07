@@ -1,4 +1,6 @@
-﻿using System.Runtime.InteropServices;
+﻿using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
+using static FPSLimiter.Hook.DebugLogger;
 
 namespace FPSLimiter.Hook;
 
@@ -11,7 +13,7 @@ internal static unsafe class WinEventHook
     private static Action<IntPtr>? _onForegroundAction;
     private static IntPtr _lastHandleChecked = IntPtr.Zero;
 
-    [UnmanagedCallersOnly(EntryPoint = "OnForegroundChanged")]
+    [UnmanagedCallersOnly(EntryPoint = "OnForegroundChanged", CallConvs = [typeof(CallConvStdcall)])]
     public static void OnForegroundChanged(IntPtr hWinEventHook, uint eventType, IntPtr hwnd,
         int idObject, int idChild, uint dwEventThread, uint dwmsEventTime)
     {
@@ -34,11 +36,18 @@ internal static unsafe class WinEventHook
 
     public static void StartListening(Action<IntPtr> callback)
     {
-        _onForegroundAction = callback;
+        try
+        {
+            _onForegroundAction = callback;
 
-        Thread listenerThread = new Thread(RunHookListener);
-        listenerThread.IsBackground = true;
-        listenerThread.Start();
+            Thread listenerThread = new Thread(RunHookListener);
+            listenerThread.IsBackground = true;
+            listenerThread.Start();
+        }
+        catch (Exception ex)
+        {
+            Error(ex, $"{nameof(WinEventHook)}.{nameof(StartListening)}");
+        }
     }
 
     private static void RunHookListener()
@@ -56,4 +65,15 @@ internal static unsafe class WinEventHook
         NativeMethods.MSG msg;
         while (NativeMethods.GetMessage(out msg, IntPtr.Zero, 0, 0)) { }
     }
+
+    //[DllImport("user32.dll")]
+    //static extern IntPtr SetWinEventHook(uint eventMin, uint eventMax, IntPtr hmodWinEventProc,
+    //    delegate* unmanaged<IntPtr, uint, IntPtr, int, int, uint, uint, void> pfnWinEventProc,
+    //    uint idProcess, uint idThread, uint dwFlags);
+    //
+    //[DllImport("user32.dll")]
+    //static extern bool GetMessage(out MSG lpMsg, IntPtr hWnd, uint wMsgFilterMin, uint wMsgFilterMax);
+    //
+    //[StructLayout(LayoutKind.Sequential)]
+    //struct MSG { IntPtr hwnd; uint message; IntPtr wParam; IntPtr lParam; uint time; int ptX; int ptY; }
 }

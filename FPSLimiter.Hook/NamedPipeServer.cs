@@ -43,13 +43,12 @@ public static unsafe class NamedPipeServer
     internal static NamedPipeServerStream CreateNamedPipeServer()
     {
         Info($"Creating named pipe server: {FpsLimiterPipeName}");
+        // ToDo: Re-write the pipe to use async, native aot span or similar instead of binary reader/writer. then we can support timeout without a huge penalty
         var pipe = new NamedPipeServerStream(FpsLimiterPipeName, PipeDirection.InOut, 1, PipeTransmissionMode.Byte, PipeOptions.None);
-        pipe.ReadTimeout = 2000;
-        pipe.WriteTimeout = 2000;
 
         return pipe;
     }
-    
+
     internal static void StartPipeServer()
     {
         var failureCount = 0;

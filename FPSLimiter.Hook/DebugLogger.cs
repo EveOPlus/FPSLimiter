@@ -7,7 +7,7 @@ internal static class DebugLogger
     private static readonly IntPtr MainHandle = Process.GetCurrentProcess().MainWindowHandle;
     public static void Info(string message)
     {
-        NativeMethods.OutputDebugString($"[EVE-O HOOK] [PID {MainHandle}] [INFO] {message}");
+        NativeMethods.OutputDebugString($"[EVE-O HOOK] [{MainHandle}] [INFO] {message}");
     }
 
     public static void Error(string message)

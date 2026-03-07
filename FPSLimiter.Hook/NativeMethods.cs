@@ -1,4 +1,6 @@
-﻿namespace FPSLimiter.Hook;
+﻿using System.Runtime.CompilerServices;
+
+namespace FPSLimiter.Hook;
 
 using System.Runtime.InteropServices;
 
@@ -44,33 +46,56 @@ internal static unsafe partial class NativeMethods
     [return: MarshalAs(UnmanagedType.Bool)]
     public static partial bool AllowSetForegroundWindow(int dwProcessId);
 
-    [LibraryImport("user32.dll", SetLastError = true)]
-    public static partial IntPtr SetWinEventHook(
+    //[LibraryImport("user32.dll", SetLastError = true)]
+    //public static partial IntPtr SetWinEventHook(
+    //    uint eventMin,
+    //    uint eventMax,
+    //    IntPtr hmodWinEventProc,
+    //    delegate* unmanaged<IntPtr, uint, IntPtr, int, int, uint, uint, void> pfnWinEventProc,
+    //    uint idProcess,
+    //    uint idThread,
+    //    uint dwFlags);
+    //
+    //[LibraryImport("user32.dll", SetLastError = true)]
+    //[return: MarshalAs(UnmanagedType.Bool)]
+    //public static partial bool GetMessage(
+    //    out MSG lpMsg,
+    //    IntPtr hWnd,
+    //    uint wMsgFilterMin,
+    //    uint wMsgFilterMax);
+    //
+    //[StructLayout(LayoutKind.Sequential)]
+    //public struct MSG
+    //{
+    //    public IntPtr hwnd;
+    //    public uint message;
+    //    public IntPtr wParam;
+    //    public IntPtr lParam;
+    //    public uint time;
+    //    public int ptX;
+    //    public int ptY;
+    //}
+
+    [LibraryImport("user32.dll", EntryPoint = "SetWinEventHook")]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvStdcall)])]
+    internal static partial IntPtr SetWinEventHook(
         uint eventMin,
         uint eventMax,
         IntPtr hmodWinEventProc,
-        delegate* unmanaged<IntPtr, uint, IntPtr, int, int, uint, uint, void> pfnWinEventProc,
+        delegate* unmanaged[Stdcall]<IntPtr, uint, IntPtr, int, int, uint, uint, void> pfnWinEventProc,
         uint idProcess,
         uint idThread,
         uint dwFlags);
 
-    [LibraryImport("user32.dll", SetLastError = true)]
+    [LibraryImport("user32.dll", EntryPoint = "GetMessageW")] // 'W' is for Unicode, safer for .NET
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvStdcall)])]
     [return: MarshalAs(UnmanagedType.Bool)]
-    public static partial bool GetMessage(
+    internal static partial bool GetMessage(
         out MSG lpMsg,
         IntPtr hWnd,
         uint wMsgFilterMin,
         uint wMsgFilterMax);
 
     [StructLayout(LayoutKind.Sequential)]
-    public struct MSG
-    {
-        public IntPtr hwnd;
-        public uint message;
-        public IntPtr wParam;
-        public IntPtr lParam;
-        public uint time;
-        public int ptX;
-        public int ptY;
-    }
+    internal struct MSG { IntPtr hwnd; uint message; IntPtr wParam; IntPtr lParam; uint time; int ptX; int ptY; }
 }
