@@ -43,7 +43,11 @@ public static unsafe class NamedPipeServer
     internal static NamedPipeServerStream CreateNamedPipeServer()
     {
         Info($"Creating named pipe server: {FpsLimiterPipeName}");
-        return new NamedPipeServerStream(FpsLimiterPipeName, PipeDirection.InOut, 1, PipeTransmissionMode.Byte, PipeOptions.None);
+        var pipe = new NamedPipeServerStream(FpsLimiterPipeName, PipeDirection.InOut, 1, PipeTransmissionMode.Byte, PipeOptions.None);
+        pipe.ReadTimeout = 2000;
+        pipe.WriteTimeout = 2000;
+
+        return pipe;
     }
     
     internal static void StartPipeServer()
