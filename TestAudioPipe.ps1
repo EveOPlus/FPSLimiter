@@ -4,7 +4,7 @@ $process = Get-Process -Name $processName -ErrorAction SilentlyContinue
 if (-not $process) { Write-Error "Could not find process: $processName"; exit }
 
 $PipeName = "FpsLimiter_$($process[0].MainWindowHandle)"
-$JumpGates = @(3689163958, 1537508544, 1768044352)
+$JumpGates = @(3689163958, 1537508544, 1768044352, 2377891014, 3090840445)
 
 # --- Protocol Constants ---
 $Dir = @{ Query = [byte]0xA1; Update = [byte]0xA2; FireAndForget = [byte]0xA3 }

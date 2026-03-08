@@ -53,72 +53,10 @@ public unsafe class DxHook
         }
 
         //Log($"Subscribing to EVENT_SYSTEM_FOREGROUND");
-        WinEventHook.StartListening(HandleForegroundChangedEvent);
-
+        // WinEventHook.StartListening(HandleForegroundChangedEvent);
         try
         {
-            //Log($"Setup dummy DXGI objects to find the VTable address");
-            using var factory = new Factory1();
-            using var device = new SharpDX.Direct3D11.Device(DriverType.Hardware, DeviceCreationFlags.None);
-            using var swapChain = new SwapChain(factory, device, new SwapChainDescription()
-            {
-                BufferCount = 1,
-                ModeDescription = new ModeDescription(1, 1, new Rational(60, 1), Format.R8G8B8A8_UNorm),
-                Usage = Usage.RenderTargetOutput,
-                OutputHandle = Process.GetCurrentProcess().MainWindowHandle,
-                SampleDescription = new SampleDescription(1, 0),
-                IsWindowed = true
-            });
-
-            void** vTablePointer = *(void***)swapChain.NativePointer;
-
-            //Log($"Locating Present should at index 8 for DirectX 11");
-            void** presentEntryPtr = &vTablePointer[8];
-            _originalPresent = (delegate* unmanaged[Stdcall]<IntPtr, uint, uint, int>)*presentEntryPtr;
-
-            // Grant access to the memory address
-            if (NativeMethods.VirtualProtect((IntPtr)presentEntryPtr, (UIntPtr)sizeof(nint), PAGE_EXECUTE_READWRITE, out var oldProtect))
-            {
-                Info($"Hooking into Present");
-                *presentEntryPtr = (delegate* unmanaged[Stdcall]<IntPtr, uint, uint, int>)&HookedPresent;
-                // Set the protection back to what it was before we got here.
-                NativeMethods.VirtualProtect((IntPtr)presentEntryPtr, (UIntPtr)sizeof(nint), oldProtect, out _);
-            }
-
-            bool isDx12Game = false;
-            foreach (ProcessModule module in Process.GetCurrentProcess().Modules)
-            {
-                if (module.ModuleName?.ToLower() == "d3d12.dll")
-                {
-                    //Log($"Located DirectX 12 module is loaded.");
-                    isDx12Game = true;
-                    break;
-                }
-            }
-
-            if (isDx12Game)
-            {
-                //Log($"Locating Present1 should at index 22 for DirectX 12");
-                void** presentEntry22 = &vTablePointer[22];
-                _originalPresent1 = (delegate* unmanaged[Stdcall]<IntPtr, uint, uint, IntPtr, int>)*presentEntry22;
-
-                if (NativeMethods.VirtualProtect((IntPtr)presentEntry22, (UIntPtr)sizeof(nint), PAGE_EXECUTE_READWRITE, out var oldProtectDx12))
-                {
-                    Info($"Hooking into Present1");
-                    *presentEntry22 = (delegate* unmanaged[Stdcall]<IntPtr, uint, uint, IntPtr, int>)&HookedPresent1;
-
-                    NativeMethods.VirtualProtect((IntPtr)presentEntry22, (UIntPtr)sizeof(nint), oldProtectDx12, out _);
-                }
-            }
-        }
-        catch (Exception ex)
-        {
-            Error(ex, $"{nameof(Initialize)} Initializing DirectX");
-        }
-
-        try
-        {
-            AudioHook.InstallAudioHooks();
+            MuteSystem.InstallAudioMonitor();
         }
         catch (Exception ex)
         {

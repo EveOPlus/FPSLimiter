@@ -34,37 +34,37 @@ internal static unsafe class WinEventHook
         _onForegroundAction?.Invoke(hwnd);
     }
 
-    public static void StartListening(Action<IntPtr> callback)
-    {
-        try
-        {
-            _onForegroundAction = callback;
+    //public static void StartListening(Action<IntPtr> callback)
+    //{
+    //    try
+    //    {
+    //        _onForegroundAction = callback;
+    //
+    //        Thread listenerThread = new Thread(RunHookListener);
+    //        listenerThread.IsBackground = true;
+    //        listenerThread.Start();
+    //    }
+    //    catch (Exception ex)
+    //    {
+    //        Error(ex, $"{nameof(WinEventHook)}.{nameof(StartListening)}");
+    //    }
+    //}
 
-            Thread listenerThread = new Thread(RunHookListener);
-            listenerThread.IsBackground = true;
-            listenerThread.Start();
-        }
-        catch (Exception ex)
-        {
-            Error(ex, $"{nameof(WinEventHook)}.{nameof(StartListening)}");
-        }
-    }
-
-    private static void RunHookListener()
-    {
-        IntPtr hook = NativeMethods.SetWinEventHook(
-            EVENT_SYSTEM_FOREGROUND,
-            EVENT_SYSTEM_FOREGROUND,
-            IntPtr.Zero,
-            &OnForegroundChanged,
-            0, 0, WINEVENT_OUTOFCONTEXT);
-
-        if (hook == IntPtr.Zero) return;
-
-        // This loop blocks the BACKGROUND thread, waiting for OS notifications
-        NativeMethods.MSG msg;
-        while (NativeMethods.GetMessage(out msg, IntPtr.Zero, 0, 0)) { }
-    }
+    //private static void RunHookListener()
+    //{
+    //    IntPtr hook = NativeMethods.SetWinEventHook(
+    //        EVENT_SYSTEM_FOREGROUND,
+    //        EVENT_SYSTEM_FOREGROUND,
+    //        IntPtr.Zero,
+    //        &OnForegroundChanged,
+    //        0, 0, WINEVENT_OUTOFCONTEXT);
+    //
+    //    if (hook == IntPtr.Zero) return;
+    //
+    //    // This loop blocks the BACKGROUND thread, waiting for OS notifications
+    //    NativeMethods.MSG msg;
+    //    while (NativeMethods.GetMessage(out msg, IntPtr.Zero, 0, 0)) { }
+    //}
 
     //[DllImport("user32.dll")]
     //static extern IntPtr SetWinEventHook(uint eventMin, uint eventMax, IntPtr hmodWinEventProc,
