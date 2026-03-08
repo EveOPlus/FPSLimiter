@@ -13,7 +13,7 @@ internal static unsafe class WinEventHook
     private static Action<IntPtr>? _onForegroundAction;
     private static IntPtr _lastHandleChecked = IntPtr.Zero;
 
-    [UnmanagedCallersOnly(EntryPoint = "OnForegroundChanged", CallConvs = [typeof(CallConvStdcall)])]
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvStdcall)])]
     public static void OnForegroundChanged(IntPtr hWinEventHook, uint eventType, IntPtr hwnd,
         int idObject, int idChild, uint dwEventThread, uint dwmsEventTime)
     {
@@ -40,30 +40,45 @@ internal static unsafe class WinEventHook
         {
             _onForegroundAction = callback;
 
-            Thread listenerThread = new Thread(RunHookListener);
-            listenerThread.IsBackground = true;
+            // We run the loop on a background thread so it doesn't block the UI
+            Thread listenerThread = new Thread(RunHookListener)
+            {
+                IsBackground = true
+            };
             listenerThread.Start();
         }
         catch (Exception ex)
         {
-            Error(ex, $"{nameof(WinEventHook)}.{nameof(StartListening)}");
+            Console.WriteLine($"Error in {nameof(StartListening)}: {ex}");
         }
     }
 
-    private static void RunHookListener()
+    private static unsafe void RunHookListener()
     {
+        const uint EVENT_SYSTEM_FOREGROUND = 0x0003;
+        const uint WINEVENT_OUTOFCONTEXT = 0x0000;
+
+        // Pass the address (&) of the static OnForegroundChanged method
         IntPtr hook = NativeMethods.SetWinEventHook(
             EVENT_SYSTEM_FOREGROUND,
             EVENT_SYSTEM_FOREGROUND,
             IntPtr.Zero,
             &OnForegroundChanged,
-            0, 0, WINEVENT_OUTOFCONTEXT);
+            0,
+            0,
+            WINEVENT_OUTOFCONTEXT);
 
         if (hook == IntPtr.Zero) return;
 
-        // This loop blocks the BACKGROUND thread, waiting for OS notifications
+        // The Message Pump: Keeps the thread alive and processes the Hook callbacks
         NativeMethods.MSG msg;
-        while (NativeMethods.GetMessage(out msg, IntPtr.Zero, 0, 0)) { }
+        while (NativeMethods.GetMessage(out msg, IntPtr.Zero, 0, 0))
+        {
+            NativeMethods.TranslateMessage(ref msg);
+            NativeMethods.DispatchMessage(ref msg);
+        }
+
+        NativeMethods.UnhookWinEvent(hook);
     }
 
     //[DllImport("user32.dll")]

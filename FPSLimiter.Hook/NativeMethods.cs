@@ -46,39 +46,8 @@ internal static unsafe partial class NativeMethods
     [return: MarshalAs(UnmanagedType.Bool)]
     public static partial bool AllowSetForegroundWindow(int dwProcessId);
 
-    //[LibraryImport("user32.dll", SetLastError = true)]
-    //public static partial IntPtr SetWinEventHook(
-    //    uint eventMin,
-    //    uint eventMax,
-    //    IntPtr hmodWinEventProc,
-    //    delegate* unmanaged<IntPtr, uint, IntPtr, int, int, uint, uint, void> pfnWinEventProc,
-    //    uint idProcess,
-    //    uint idThread,
-    //    uint dwFlags);
-    //
-    //[LibraryImport("user32.dll", SetLastError = true)]
-    //[return: MarshalAs(UnmanagedType.Bool)]
-    //public static partial bool GetMessage(
-    //    out MSG lpMsg,
-    //    IntPtr hWnd,
-    //    uint wMsgFilterMin,
-    //    uint wMsgFilterMax);
-    //
-    //[StructLayout(LayoutKind.Sequential)]
-    //public struct MSG
-    //{
-    //    public IntPtr hwnd;
-    //    public uint message;
-    //    public IntPtr wParam;
-    //    public IntPtr lParam;
-    //    public uint time;
-    //    public int ptX;
-    //    public int ptY;
-    //}
-
-    [LibraryImport("user32.dll", EntryPoint = "SetWinEventHook")]
-    [UnmanagedCallConv(CallConvs = [typeof(CallConvStdcall)])]
-    internal static partial IntPtr SetWinEventHook(
+    [LibraryImport("user32.dll", EntryPoint = "SetWinEventHook", SetLastError = true)]
+    internal static unsafe partial IntPtr SetWinEventHook(
         uint eventMin,
         uint eventMax,
         IntPtr hmodWinEventProc,
@@ -87,8 +56,11 @@ internal static unsafe partial class NativeMethods
         uint idThread,
         uint dwFlags);
 
-    [LibraryImport("user32.dll", EntryPoint = "GetMessageW")] // 'W' is for Unicode, safer for .NET
-    [UnmanagedCallConv(CallConvs = [typeof(CallConvStdcall)])]
+    [LibraryImport("user32.dll", EntryPoint = "UnhookWinEvent", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static partial bool UnhookWinEvent(IntPtr hWinEventHook);
+
+    [LibraryImport("user32.dll", EntryPoint = "GetMessageW", SetLastError = true, StringMarshalling = StringMarshalling.Utf16)]
     [return: MarshalAs(UnmanagedType.Bool)]
     internal static partial bool GetMessage(
         out MSG lpMsg,
@@ -96,6 +68,79 @@ internal static unsafe partial class NativeMethods
         uint wMsgFilterMin,
         uint wMsgFilterMax);
 
+    [LibraryImport("user32.dll", EntryPoint = "TranslateMessage")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static partial bool TranslateMessage(ref MSG lpMsg);
+
+    [LibraryImport("user32.dll", EntryPoint = "DispatchMessageW")]
+    internal static partial IntPtr DispatchMessage(ref MSG lpMsg);
+
     [StructLayout(LayoutKind.Sequential)]
-    internal struct MSG { IntPtr hwnd; uint message; IntPtr wParam; IntPtr lParam; uint time; int ptX; int ptY; }
+    internal struct MSG
+    {
+        public IntPtr hwnd;
+        public uint message;
+        public IntPtr wParam;
+        public IntPtr lParam;
+        public uint time;
+        public int ptX;
+        public int ptY;
+        public uint lPrivate;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    internal unsafe struct EXCEPTION_POINTERS
+    {
+        public EXCEPTION_RECORD* ExceptionRecord;
+        public CONTEXT64* ContextRecord;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    internal unsafe struct EXCEPTION_RECORD
+    {
+        public uint ExceptionCode;
+        public uint ExceptionFlags;
+        public EXCEPTION_RECORD* ExceptionRecordNext;
+        public IntPtr ExceptionAddress;
+        public uint NumberParameters;
+        private uint __padding;
+        public fixed ulong ExceptionInformation[15];
+    }
+
+    [StructLayout(LayoutKind.Sequential, Pack = 16)]
+    internal unsafe struct CONTEXT64
+    {
+        // --- Offset 0x00 ---
+        public ulong P1Home, P2Home, P3Home, P4Home, P5Home, P6Home;
+
+        // --- Offset 0x30 ---
+        public uint ContextFlags;
+        public uint MxCsr;
+
+        // --- Offset 0x38 ---
+        public ushort SegCs, SegDs, SegEs, SegFs, SegGs, SegSs;
+        public uint EFlags;
+
+        // --- Offset 0x48 ---
+        public ulong Dr0, Dr1, Dr2, Dr3, Dr6, Dr7;
+
+        // --- Offset 0x78 ---
+        public ulong Rax, Rcx, Rdx, Rbx, Rsp, Rbp, Rsi, Rdi;
+
+        // --- Offset 0xB8 ---
+        public ulong R8, R9, R10, R11, R12, R13, R14, R15;
+
+        // --- Offset 0xF8 (248) ---
+        public ulong Rip;
+        // Rip is 8 bytes. 248 + 8 = 256 (0x100).
+
+        // --- Offset 0x100 (256) ---
+        // Total Size Requirement: 1232 bytes.
+        // 1232 - 256 (Header) = 976 bytes remaining.
+        public fixed byte VectorRegisterArea[976];
+    }
+
+    [LibraryImport("kernel32.dll", SetLastError = true)]
+    public static partial IntPtr AddVectoredExceptionHandler(uint first, delegate* unmanaged[Stdcall]<EXCEPTION_POINTERS*, int> handler);
+
 }

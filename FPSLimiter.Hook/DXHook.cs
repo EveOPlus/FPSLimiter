@@ -118,7 +118,7 @@ public unsafe class DxHook
 
         try
         {
-            AudioHook.InstallAudioHooks();
+            AudioMuteSystem.InstallAudioMonitor();
         }
         catch (Exception ex)
         {

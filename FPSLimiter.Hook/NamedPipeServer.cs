@@ -169,7 +169,7 @@ public static unsafe class NamedPipeServer
         for (int i = 0; i < length; i++)
         {
             var nextId = reader.ReadUInt32();
-            AudioHook.AddMutedId(nextId);
+            AudioMuteSystem.AddMutedId(nextId);
         }
     }
 
@@ -179,13 +179,13 @@ public static unsafe class NamedPipeServer
         for (int i = 0; i < length; i++)
         {
             var nextId = reader.ReadUInt32();
-            AudioHook.RemoveMutedId(nextId);
+            AudioMuteSystem.RemoveMutedId(nextId);
         }
     }
 
     private static void A2C1_UnmuteAllSounds()
     {
-        AudioHook.ClearMutedIds();
+        AudioMuteSystem.ClearMutedIds();
     }
 
     private static void A1C5_SendSoundEventHistory(BinaryWriter writer)
@@ -202,7 +202,7 @@ public static unsafe class NamedPipeServer
 
     private static void A1C4_SendAllMutedSounds(BinaryWriter writer)
     {
-        var allMutedSounds = AudioHook.GetMutedIds();
+        var allMutedSounds = AudioMuteSystem.GetMutedIds();
         writer.Write(allMutedSounds.Count);
 
         foreach (var id in allMutedSounds)
