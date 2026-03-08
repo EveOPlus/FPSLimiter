@@ -1,4 +1,5 @@
-﻿using System.Diagnostics;
+﻿using SharpDX;
+using System.Diagnostics;
 using System.Net;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
@@ -22,6 +23,12 @@ internal static unsafe class MuteSystem
     {
         try
         {
+            AddMutedId(3689163958);
+            AddMutedId(1537508544);
+            AddMutedId(1768044352);
+            AddMutedId(2377891014);
+            AddMutedId(3090840445);
+            
             var audio2Module = NativeMethods.GetModuleHandle("_audio2.dll");
 
             IntPtr postEventAddr = NativeMethods.GetProcAddress(audio2Module,
@@ -33,17 +40,12 @@ internal static unsafe class MuteSystem
                 return;
             }
 
+            _postEventAddr = postEventAddr;
+
             _vehHandle = NativeMethods.AddVectoredExceptionHandler(1, &VectoredHandler);
-            if (_vehHandle == IntPtr.Zero)
-            {
-                Error("Failed to register VEH");
-                return;
-            }
+            if (_vehHandle == IntPtr.Zero) return;
+            Arm();
 
-            ApplyBreakpointToAllThreads(postEventAddr);
-
-            Info($"Monitoring PostEvent via Hardware Breakpoint at 0x{postEventAddr:X}");
-            
             IntPtr executeActionOnPlayingIDAddr = NativeMethods.GetProcAddress(audio2Module, "?ExecuteActionOnPlayingID@SoundEngine@AK@@YAXW4AkActionOnEventType@12@IHW4AkCurveInterpolation@@@Z");
             _executeAction = (delegate* unmanaged[Cdecl]<int, uint, int, int, void>)executeActionOnPlayingIDAddr;
             if (_executeAction == null)
@@ -61,55 +63,70 @@ internal static unsafe class MuteSystem
         }
     }
 
+    private static void Arm()
+    {
+        uint oldProtect; // FIX 3: Always provide a real variable for the output
+        NativeMethods.VirtualProtect(_postEventAddr, 1, 0x40 | 0x100, out oldProtect);
+    }
+
     [ThreadStatic] private static uint _currentEventId;
 
     [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvStdcall) })]
-    private static int VectoredHandler(EXCEPTION_POINTERS* pExp)
+    public static unsafe int VectoredHandler(EXCEPTION_POINTERS* pExp)
     {
-        // If it's not a hardware breakpoint, let the game handle it
-        if (pExp->ExceptionRecord->ExceptionCode != 0x80000004) return 0;
+        uint code = pExp->ExceptionRecord->ExceptionCode;
+        CONTEXT64* ctx = pExp->ContextRecord;
 
-        var ctx = pExp->ContextRecord;
-
-        // ALWAYS Clear the Resume Flag and Status bits to prevent loops
-        ctx->EFlags |= 0x10000;
-        ulong status = ctx->Dr6;
-        ctx->Dr6 = 0; // Clear all status bits (Dr0-Dr3) immediately
-
-        // Identify which breakpoint hit using Dr6 bits
-        if ((status & 0x1) != 0) // Dr0 hit (Entry)
+        // --- CASE 1: Guard Page Hit (Entry) ---
+        if (code == 0x80000001)
         {
-            _currentEventId = (uint)ctx->Rcx;
-
-            if (ctx->Rsp != 0 && (ctx->Rsp & 7) == 0)
+            if (ctx->Rip == (ulong)_postEventAddr)
             {
-                ulong returnAddr = *(ulong*)ctx->Rsp;
-                ctx->Dr1 = returnAddr;
-                ctx->Dr7 |= (1u << 2); // Enable L1
+                _currentEventId = (uint)ctx->Rcx;
+
+                if (ctx->Rsp != 0)
+                {
+                    // Set Return Breakpoint
+                    ctx->Dr0 = *(ulong*)ctx->Rsp;
+                    ctx->Dr7 |= 0x1UL;
+                }
             }
-            return -1; // CONTINUE
-        }
 
-        if ((status & 0x2) != 0) // Dr1 hit (The function just returned)
-        {
-            // Capture the Result (PlayingID) from RAX
-            uint playingId = (uint)ctx->Rax;
-
-            // 2. Pair it with your stored EventID
-            //Info($"Event: {_currentEventId} -> Result PlayingID: {playingId} on Thread {NativeMethods.GetCurrentThreadId()}");
-
-            // 3. Cleanup
-            ctx->Dr1 = 0;
-            ctx->Dr7 &= ~(1u << 2); // Disable L1
+            ctx->EFlags |= 0x100; // Force Single Step to Re-arm
             return -1;
         }
 
-        // 3. Fallback: If we got a SINGLE_STEP but it wasn't our bits, 
-        // we still MUST continue, otherwise the app crashes.
-        return -1;
+        // --- CASE 2 & 3: Single Step (Re-arm + Return Capture) ---
+        if (code == 0x80000004)
+        {
+            // Check if this specific step was our Hardware Breakpoint (Return)
+            if ((ctx->Dr6 & 0x1UL) != 0)
+            {
+                uint playingId = (uint)ctx->Rax;
+                //Info($"Event: {_currentEventId} -> Result: {playingId}");
+                
+                if (IsMuted(_currentEventId) && playingId != 0)
+                {
+                    _executeAction((int)AkActionOnEventType.Stop, playingId, 0, (int)AkCurveInterpolation.Constant);
+                    Info($"Audio Stop Actioned on PlayingID: {playingId} EventID: {_currentEventId}");
+                }
+
+                // Cleanup HW registers
+                ctx->Dr0 = 0;
+                ctx->Dr7 &= ~0x1UL;
+                ctx->Dr6 &= ~0x1UL;
+            }
+
+            // CRITICAL: Always re-arm the Page Guard on EVERY single step
+            // This ensures the "tripwire" is put back even if we just hit a return.
+            Arm();
+
+            return -1;
+        }
+
+        return 0;
     }
-
-
+    
     private const ulong DR7_ENTRY_MASK = 0x1 | 0x2 | 0x100 | 0x200;
     private static void ApplyBreakpointToAllThreads(IntPtr address)
     {
